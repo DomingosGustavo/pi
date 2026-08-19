@@ -843,17 +843,18 @@ const THEME_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
 
 // Export theme as a getter that reads from globalThis
 // This ensures all module instances (tsx, jiti) see the same theme
-export const theme: Theme = new Proxy({} as Theme, {
-	get(_target, prop) {
-		const t = (globalThis as Record<symbol, Theme>)[THEME_KEY];
-		if (!t) throw new Error("Theme not initialized. Call initTheme() first.");
-		return (t as unknown as Record<string | symbol, unknown>)[prop];
-	},
-});
+// scriptc port: 'new Proxy' has no lowering (SC2020). The proxy existed to share one
+// theme across module loaders (tsx + jiti); a compiled binary has a single module
+// instance, so a plain object updated in place is equivalent there.
+// Divergence: reads before initTheme() yield the default theme instead of throwing.
+export const theme: Theme = {} as Theme;
 
 function setGlobalTheme(t: Theme): void {
 	(globalThis as Record<symbol, Theme>)[THEME_KEY] = t;
 	(globalThis as Record<symbol, Theme>)[THEME_KEY_OLD] = t;
+	// scriptc port: `theme` is a plain object rather than a Proxy, so the active theme
+	// must be copied into it in place. Keeps every existing `theme.x` read working.
+	Object.assign(theme, t);
 }
 
 let currentThemeName: string | undefined;

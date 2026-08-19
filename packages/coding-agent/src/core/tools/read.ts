@@ -3,7 +3,8 @@ import type { AgentTool } from "@earendil-works/pi-agent-core";
 import type { Api, ImageContent, Model, TextContent } from "@earendil-works/pi-ai";
 import { Text } from "@earendil-works/pi-tui";
 import { constants } from "fs";
-import { access as fsAccess, readFile as fsReadFile } from "fs/promises";
+import { accessSync as fsAccessSync } from "node:fs";
+import { readFile as fsReadFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { getReadmePath } from "../../config.ts";
 import { keyHint, keyText } from "../../modes/interactive/components/keybinding-hints.ts";
@@ -52,12 +53,15 @@ export interface ReadOperations {
 	/** Check if file is readable (throw if not) */
 	access: (absolutePath: string) => Promise<void>;
 	/** Detect image MIME type, return null or undefined for non-images */
-	detectImageMimeType?: (absolutePath: string) => Promise<string | null | undefined>;
+	detectImageMimeType?: (absolutePath: string) => Promise<string | null>;
 }
 
 const defaultReadOperations: ReadOperations = {
 	readFile: (path) => fsReadFile(path),
-	access: (path) => fsAccess(path, constants.R_OK),
+	// scriptc: fs/promises.access has no lowering (SC2020); accessSync does.
+	access: async (path) => {
+		fsAccessSync(path, constants.R_OK);
+	},
 	detectImageMimeType: detectSupportedImageMimeTypeFromFile,
 };
 

@@ -1,7 +1,8 @@
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { constants } from "fs";
-import { access as fsAccess, readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
+import { accessSync as fsAccessSync } from "node:fs";
+import { readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.ts";
 import type { Theme } from "../../modes/interactive/theme/theme.ts";
@@ -105,7 +106,10 @@ export interface EditOperations {
 const defaultEditOperations: EditOperations = {
 	readFile: (path) => fsReadFile(path),
 	writeFile: (path, content) => fsWriteFile(path, content, "utf-8"),
-	access: (path) => fsAccess(path, constants.R_OK | constants.W_OK),
+	// scriptc: fs/promises.access has no lowering (SC2020); accessSync does.
+	access: async (path) => {
+		fsAccessSync(path, constants.R_OK | constants.W_OK);
+	},
 };
 
 export interface EditToolOptions {

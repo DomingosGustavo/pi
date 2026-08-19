@@ -54,15 +54,15 @@ export interface FindToolDetails {
  */
 export interface FindOperations {
 	/** Check if path exists */
-	exists: (absolutePath: string) => Promise<boolean> | boolean;
+	exists: (absolutePath: string) => Promise<boolean>;
 	/** Find files matching glob pattern. Returns relative or absolute paths. */
-	glob: (pattern: string, cwd: string, options: { ignore: string[]; limit: number }) => Promise<string[]> | string[];
+	glob: (pattern: string, cwd: string, options: { ignore: string[]; limit: number }) => Promise<string[]>;
 }
 
 const defaultFindOperations: FindOperations = {
 	exists: pathExists,
 	// This is a placeholder. Actual fd execution happens in execute() when no custom glob is provided.
-	glob: () => [],
+	glob: async () => [],
 };
 
 export interface FindToolOptions {

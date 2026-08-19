@@ -55,14 +55,14 @@ export interface GrepToolDetails {
  */
 export interface GrepOperations {
 	/** Check if path is a directory. Throws if path does not exist. */
-	isDirectory: (absolutePath: string) => Promise<boolean> | boolean;
+	isDirectory: (absolutePath: string) => Promise<boolean>;
 	/** Read file contents for context lines */
-	readFile: (absolutePath: string) => Promise<string> | string;
+	readFile: (absolutePath: string) => Promise<string>;
 }
 
 const defaultGrepOperations: GrepOperations = {
 	isDirectory: async (p) => (await fsStat(p)).isDirectory(),
-	readFile: (p) => fsReadFile(p, "utf-8"),
+	readFile: async (p) => await fsReadFile(p, "utf-8"),
 };
 
 export interface GrepToolOptions {

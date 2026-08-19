@@ -9,10 +9,11 @@ import { APP_NAME } from "./config.ts";
 import { configureHttpDispatcher } from "./core/http-dispatcher.ts";
 import { main } from "./main.ts";
 
-process.title = APP_NAME;
+// scriptc port: assignment to process.title is SC1090 (not a writable variable).
+void APP_NAME;
 process.env.PI_CODING_AGENT = "true";
 process.env.AI_AGENT = "pi";
-process.emitWarning = (() => {}) as typeof process.emitWarning;
+// scriptc port: assignment to process.emitWarning is SC1090.
 
 // Configure undici's global dispatcher before provider SDKs issue requests.
 // Runtime settings are applied once SettingsManager has loaded global/project settings.

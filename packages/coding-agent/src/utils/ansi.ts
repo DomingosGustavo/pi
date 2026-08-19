@@ -38,7 +38,8 @@ function ansiRegex({ onlyFirst = false }: { onlyFirst?: boolean } = {}): RegExp 
 
 	const pattern = `${osc}|${csi}`;
 
-	return new RegExp(pattern, onlyFirst ? undefined : "g");
+	// scriptc: RegExp with a 'string | undefined' flags argument has no lowering (SC2020).
+	return onlyFirst ? new RegExp(pattern) : new RegExp(pattern, "g");
 }
 
 const regex = ansiRegex();

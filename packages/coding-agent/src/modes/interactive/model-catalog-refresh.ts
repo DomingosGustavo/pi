@@ -11,29 +11,43 @@ interface ActiveModelCatalogRefresh {
 }
 
 class ModelCatalogRefreshCoordinator {
-	private readonly activeByRuntime = new WeakMap<ModelCatalogRuntime, ActiveModelCatalogRefresh>();
+	// scriptc port: WeakMap has no lowering (SC2020) and Map keys must be string/number.
+	// Key on a serial id stamped onto the runtime instead. Divergence: entries are not
+	// weakly held, so a runtime that is dropped without completing leaks one entry.
+	private readonly activeById = new Map<number, ActiveModelCatalogRefresh>();
+	private nextRuntimeId = 1;
+
+	private idOf(modelRuntime: ModelCatalogRuntime): number {
+		const tagged = modelRuntime as unknown as { __piRefreshId?: number };
+		if (tagged.__piRefreshId === undefined) {
+			tagged.__piRefreshId = this.nextRuntimeId;
+			this.nextRuntimeId++;
+		}
+		return tagged.__piRefreshId;
+	}
 
 	refresh(modelRuntime: ModelCatalogRuntime, signal: AbortSignal): Promise<ModelsRefreshResult> {
 		signal.throwIfAborted();
-		let active = this.activeByRuntime.get(modelRuntime);
+		const runtimeId = this.idOf(modelRuntime);
+		let active = this.activeById.get(runtimeId);
 		if (!active) {
 			const controller = new AbortController();
 			let created!: ActiveModelCatalogRefresh;
 			const operation = modelRuntime.refresh({ signal: controller.signal });
 			const promise = raceWithAbortSignal(operation, controller.signal).finally(() => {
-				if (this.activeByRuntime.get(modelRuntime) === created) {
-					this.activeByRuntime.delete(modelRuntime);
+				if (this.activeById.get(runtimeId) === created) {
+					this.activeById.delete(runtimeId);
 				}
 			});
 			created = { controller, promise, waiters: 0 };
 			active = created;
-			this.activeByRuntime.set(modelRuntime, active);
+			this.activeById.set(runtimeId, active);
 		}
 
 		active.waiters++;
 		return raceWithAbortSignal(active.promise, signal).finally(() => {
 			active.waiters--;
-			if (active.waiters === 0 && this.activeByRuntime.get(modelRuntime) === active) {
+			if (active.waiters === 0 && this.activeById.get(runtimeId) === active) {
 				active.controller.abort();
 			}
 		});

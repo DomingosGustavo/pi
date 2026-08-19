@@ -1,5 +1,4 @@
 import { accessSync, constants } from "node:fs";
-import { access } from "node:fs/promises";
 import { normalizePath, resolvePath } from "../../utils/paths.ts";
 
 const NARROW_NO_BREAK_SPACE = "\u202F";
@@ -30,7 +29,8 @@ function fileExists(filePath: string): boolean {
 
 export async function pathExists(filePath: string): Promise<boolean> {
 	try {
-		await access(filePath, constants.F_OK);
+		// scriptc: fs/promises.access has no lowering (SC2020); accessSync does.
+		accessSync(filePath, constants.F_OK);
 		return true;
 	} catch {
 		return false;

@@ -93,7 +93,9 @@ type BuiltInKeyBindings = Partial<Record<KeyId, { keybinding: string; restrictOv
 
 const buildBuiltinKeybindings = (resolvedKeybindings: KeybindingsConfig): BuiltInKeyBindings => {
 	const builtinKeybindings = {} as BuiltInKeyBindings;
-	for (const [keybinding, keys] of Object.entries(resolvedKeybindings)) {
+	// scriptc: Object.entries has no lowering (SC2020); Object.keys does.
+	for (const keybinding of Object.keys(resolvedKeybindings)) {
+		const keys = resolvedKeybindings[keybinding as keyof KeybindingsConfig];
 		if (keys === undefined) continue;
 		const keyList = Array.isArray(keys) ? keys : [keys];
 		const restrictOverride = (RESERVED_KEYBINDINGS_FOR_EXTENSION_CONFLICTS as readonly string[]).includes(keybinding);
