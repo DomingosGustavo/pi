@@ -73,12 +73,31 @@ const VIRTUAL_MODULES: Record<string, unknown> = {
 	"@mariozechner/pi-coding-agent": _bundledPiCodingAgent,
 };
 
-const require = createRequire(import.meta.url);
+// scriptc experiment: top level must be declaration-only so this module can
+// participate in an ES module cycle (SC1016). All initialization is lazy.
+let _require: ReturnType<typeof createRequire> | null = null;
+function getRequire(): ReturnType<typeof createRequire> {
+	if (!_require) _require = createRequire(import.meta.url);
+	return _require;
+}
 
-const isNodeSeaBinary =
-	("sea" in process.features && process.features.sea === true) ||
-	process.getBuiltinModule("node:sea")?.isSea() === true;
-const isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
+let _isNodeSeaBinary: boolean | null = null;
+function isNodeSeaBinary(): boolean {
+	if (_isNodeSeaBinary === null) {
+		_isNodeSeaBinary =
+			("sea" in process.features && process.features.sea === true) ||
+			process.getBuiltinModule("node:sea")?.isSea() === true;
+	}
+	return _isNodeSeaBinary;
+}
+
+let _isTypeScriptSourceRuntime: boolean | null = null;
+function isTypeScriptSourceRuntime(): boolean {
+	if (_isTypeScriptSourceRuntime === null) {
+		_isTypeScriptSourceRuntime = !isBunBinary && path.extname(fileURLToPath(import.meta.url)) === ".ts";
+	}
+	return _isTypeScriptSourceRuntime;
+}
 
 /**
  * Get aliases for jiti (used in built Node.js mode).
@@ -92,9 +111,9 @@ function getAliases(): Record<string, string> {
 	const __dirname = path.dirname(fileURLToPath(import.meta.url));
 	const packageIndex = path.resolve(__dirname, "../..", "index.js");
 
-	const typeboxEntry = require.resolve("typebox");
-	const typeboxCompileEntry = require.resolve("typebox/compile");
-	const typeboxValueEntry = require.resolve("typebox/value");
+	const typeboxEntry = getRequire().resolve("typebox");
+	const typeboxCompileEntry = getRequire().resolve("typebox/compile");
+	const typeboxValueEntry = getRequire().resolve("typebox/value");
 
 	const packagesRoot = path.resolve(__dirname, "../../../../");
 	const resolveWorkspaceOrImport = (workspaceRelativePath: string, specifier: string): string => {
@@ -453,9 +472,9 @@ async function loadExtensionModule(extensionPath: string, cacheToken?: Extension
 		moduleCache: false,
 		// Compiled binaries use modules embedded in the executable. Source TypeScript
 		// reuses host modules and root tsconfig paths. Built Node uses dist aliases.
-		...(isBunBinary || isNodeSeaBinary
+		...(isBunBinary || isNodeSeaBinary()
 			? { virtualModules: VIRTUAL_MODULES, tryNative: false }
-			: isTypeScriptSourceRuntime
+			: isTypeScriptSourceRuntime()
 				? { virtualModules: VIRTUAL_MODULES, tsconfigPaths: true }
 				: { alias: getAliases() }),
 	});
