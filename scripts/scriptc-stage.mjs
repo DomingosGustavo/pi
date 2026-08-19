@@ -21,6 +21,7 @@
  */
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { stageText } from "./scriptc-stage-text.mjs";
 
 const ROOT = resolve(dirname(process.argv[1]), "..");
 const outArg = process.argv.indexOf("--out");
@@ -239,6 +240,8 @@ const shimWalk = (dir) => {
 	}
 };
 shimWalk(OUT);
+
+stageText(OUT);
 
 console.log(`staged  -> ${relative(ROOT, OUT)}`);
 console.log(`routed createRequire through the island in ${shimRewrites} modules`);
