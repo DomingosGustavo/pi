@@ -29,7 +29,8 @@ type SettingsScope = "user" | "project";
 type ProjectOverrideState = "inherit" | "load" | "unload";
 export type ScopedResolvedPaths = Record<ConfigWriteScope, ResolvedPaths>;
 
-const RESOURCE_TYPES = ["extensions", "skills", "prompts", "themes"] as const satisfies readonly ResourceType[];
+// scriptc: a fixed tuple does not width-coerce into ResourceType[] (SC2002).
+const RESOURCE_TYPES: readonly ResourceType[] = ["extensions", "skills", "prompts", "themes"];
 
 const RESOURCE_TYPE_LABELS: Record<ResourceType, string> = {
 	extensions: "Extensions",

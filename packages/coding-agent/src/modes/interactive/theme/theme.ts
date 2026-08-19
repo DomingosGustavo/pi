@@ -847,7 +847,7 @@ const THEME_KEY_OLD = Symbol.for("@mariozechner/pi-coding-agent:theme");
 // theme across module loaders (tsx + jiti); a compiled binary has a single module
 // instance, so a plain object updated in place is equivalent there.
 // Divergence: reads before initTheme() yield the default theme instead of throwing.
-export const theme: Theme = {} as Theme;
+export const theme: Theme = {} as unknown as Theme;
 
 function setGlobalTheme(t: Theme): void {
 	(globalThis as Record<symbol, Theme>)[THEME_KEY] = t;
