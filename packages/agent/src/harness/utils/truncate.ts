@@ -49,7 +49,6 @@ export interface TruncationOptions {
 const nonAsciiPattern = /[^\x00-\x7f]/;
 
 function utf8ByteLength(content: string): number {
-
 	const firstNonAscii = content.search(nonAsciiPattern);
 	if (firstNonAscii === -1) return content.length;
 

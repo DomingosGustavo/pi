@@ -1,7 +1,7 @@
+import { accessSync as fsAccessSync } from "node:fs";
 import type { AgentTool } from "@earendil-works/pi-agent-core";
 import { Box, Container, Spacer, Text } from "@earendil-works/pi-tui";
 import { constants } from "fs";
-import { accessSync as fsAccessSync } from "node:fs";
 import { readFile as fsReadFile, writeFile as fsWriteFile } from "fs/promises";
 import { type Static, Type } from "typebox";
 import { renderDiff } from "../../modes/interactive/components/diff.ts";

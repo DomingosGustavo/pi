@@ -21,6 +21,7 @@
  */
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { stageHttp } from "./scriptc-stage-http.mjs";
 import { stageLazy } from "./scriptc-stage-lazy.mjs";
 import { stageText } from "./scriptc-stage-text.mjs";
 
@@ -341,6 +342,7 @@ function patchTelemetry(OUT) {
 patchTelemetry(OUT);
 stageText(OUT, ROOT);
 stageLazy(OUT);
+stageHttp(OUT);
 
 console.log(`staged  -> ${relative(ROOT, OUT)}`);
 console.log(`routed createRequire through the island in ${shimRewrites} modules`);

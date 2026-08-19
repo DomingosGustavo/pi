@@ -46,6 +46,15 @@ export interface Component {
 	invalidate(): void;
 }
 
+export interface ContainerChildOptions {
+	basis?: number | "auto";
+	grow?: number;
+	shrink?: number;
+	minSize?: number;
+	maxSize?: number;
+	visible?: (viewport: { width: number; height: number }) => boolean;
+}
+
 export type TuiInputListenerResult = { consume?: boolean; data?: string } | undefined;
 export type TuiInputListener = (data: string) => TuiInputListenerResult;
 type PendingOsc11BackgroundQuery = {
@@ -211,7 +220,7 @@ type OverlayFocusRestorePolicy = "clear" | "preserve";
 export class Container implements Component {
 	children: Component[] = [];
 
-	addChild(component: Component): void {
+	addChild(component: Component, _options?: ContainerChildOptions): void {
 		this.children.push(component);
 	}
 
@@ -332,7 +341,11 @@ export abstract class TuiBase extends Container implements TUI {
 	abstract readonly mode: TuiMode;
 	public terminal: Terminal;
 	private focusedComponent: Component | null = null;
-	private inputListeners = new Set<TuiInputListener>();
+	private inputListeners: Record<string, TuiInputListener> = {};
+	private inputListenerKeys: string[] = [];
+	private nextInputListenerId = 0;
+	private inputListenerCount = 0;
+	private dispatchingInputListeners = false;
 
 	/** Global callback for debug key (Shift+Ctrl+D). Called before input is forwarded to focused component. */
 	public onDebug?: () => void;
@@ -712,14 +725,32 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	addInputListener(listener: TuiInputListener): () => void {
-		this.inputListeners.add(listener);
-		return () => {
-			this.inputListeners.delete(listener);
-		};
+		for (const key of this.inputListenerKeys) {
+			if (this.inputListeners[key] === listener) {
+				return () => this.removeInputListener(listener);
+			}
+		}
+
+		const key = `listener${this.nextInputListenerId++}`;
+		this.inputListeners[key] = listener;
+		this.inputListenerKeys.push(key);
+		this.inputListenerCount += 1;
+		return () => this.removeInputListener(listener);
 	}
 
 	removeInputListener(listener: TuiInputListener): void {
-		this.inputListeners.delete(listener);
+		for (const key of this.inputListenerKeys) {
+			if (this.inputListeners[key] !== listener) continue;
+			delete this.inputListeners[key];
+			this.inputListenerCount -= 1;
+			this.compactInputListenerKeys();
+			return;
+		}
+	}
+
+	private compactInputListenerKeys(): void {
+		if (this.dispatchingInputListeners) return;
+		this.inputListenerKeys = this.inputListenerKeys.filter((key) => this.inputListeners[key] !== undefined);
 	}
 
 	onTerminalColorSchemeChange(listener: (scheme: TerminalColorScheme) => void): () => void {
@@ -831,16 +862,24 @@ export abstract class TuiBase extends Container implements TUI {
 			return;
 		}
 
-		if (this.inputListeners.size > 0) {
+		if (this.inputListenerCount > 0) {
 			let current = data;
-			for (const listener of this.inputListeners) {
-				const result = listener(current);
-				if (result?.consume) {
-					return;
+			this.dispatchingInputListeners = true;
+			try {
+				for (let index = 0; index < this.inputListenerKeys.length; index++) {
+					const listener = this.inputListeners[this.inputListenerKeys[index]!];
+					if (listener === undefined) continue;
+					const result = listener(current);
+					if (result?.consume) {
+						return;
+					}
+					if (result?.data !== undefined) {
+						current = result.data;
+					}
 				}
-				if (result?.data !== undefined) {
-					current = result.data;
-				}
+			} finally {
+				this.dispatchingInputListeners = false;
+				this.compactInputListenerKeys();
 			}
 			if (current.length === 0) {
 				return;

@@ -1,14 +1,7 @@
 import { LAYOUT_NODE, type LayoutViewport, type StackLayoutEntry, type StackLayoutNode } from "../layout-node.ts";
-import { type Component, Container } from "../tui.ts";
+import { type Component, Container, type ContainerChildOptions } from "../tui.ts";
 
-export interface StackEntryOptions {
-	basis?: number | "auto";
-	grow?: number;
-	shrink?: number;
-	minSize?: number;
-	maxSize?: number;
-	visible?: (viewport: LayoutViewport) => boolean;
-}
+export interface StackEntryOptions extends ContainerChildOptions {}
 
 export interface StackEntry extends StackEntryOptions {
 	component: Component;

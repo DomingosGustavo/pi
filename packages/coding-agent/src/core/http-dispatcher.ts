@@ -13,9 +13,8 @@ export const HTTP_IDLE_TIMEOUT_CHOICES = [
 	{ label: "disabled", timeoutMs: 0 },
 ] as const;
 
-// scriptc port: 'typeof globalThis.fetch' has no lowering (SC2020) and the global
-// cannot be read/assigned (SC1090). scriptc provides its own native fetch, so the
-// undici<->fetch coupling this module maintained under Node does not apply.
+const originalGlobalFetch = globalThis.fetch;
+let installedGlobalFetch: typeof globalThis.fetch | undefined;
 
 export function parseHttpIdleTimeoutMs(value: unknown): number | undefined {
 	if (typeof value === "string") {
@@ -56,14 +55,14 @@ const ignoreUndiciDispatcherError = (_error: unknown): void => {};
 // fetch body. The body stream still rejects through reader.read(); this listener
 // only prevents EventEmitter's unhandled "error" special case from crashing pi.
 function withUndiciErrorListener<T extends undici.Dispatcher>(dispatcher: T): T {
-	// scriptc port: attaching this listener requires casting an island value and passing
-	// a callback into dynamically-executed code (SC1090). undici runs in the island here,
-	// so the EventEmitter crash this guarded against does not apply to the compiled path.
+	if (dispatcher instanceof EventEmitter) {
+		EventEmitter.prototype.on.call(dispatcher, "error", ignoreUndiciDispatcherError);
+	}
 	return dispatcher;
 }
 
 function createUndiciClient(origin: string | URL, options: object): undici.Dispatcher {
-	return withUndiciErrorListener(new undici.Client(origin, options as undici.Client.Options));
+	return withUndiciErrorListener(new undici.Client(origin, options));
 }
 
 function createUndiciOriginDispatcher(origin: string | URL, options: object): undici.Dispatcher {
@@ -101,6 +100,12 @@ export function configureHttpDispatcher(timeoutMs: number = DEFAULT_HTTP_IDLE_TI
 	// bundled fetch can otherwise consume compressed responses through npm undici's
 	// dispatcher without decompressing them, causing response.json() failures.
 	// If a caller replaced fetch after module load, preserve that deliberate override.
-	// scriptc port: no global-fetch installation (see note above).
-	undici.install?.();
+	const shouldInstallGlobals =
+		installedGlobalFetch === undefined
+			? globalThis.fetch === originalGlobalFetch
+			: globalThis.fetch === installedGlobalFetch;
+	if (shouldInstallGlobals) {
+		undici.install?.();
+		installedGlobalFetch = globalThis.fetch;
+	}
 }
