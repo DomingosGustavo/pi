@@ -260,7 +260,7 @@ const noOpUIContext: ExtensionUIContext = {
 	get theme() {
 		return theme;
 	},
-	getAllThemes: () => [],
+	getAllThemes: (): { name: string; path: string | undefined }[] => [],
 	getTheme: () => undefined,
 	setTheme: (_theme: string | Theme) => ({ success: false, error: "UI not available" }),
 	getToolsExpanded: () => false,

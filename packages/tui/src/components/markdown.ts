@@ -1,27 +1,10 @@
-import { Marked, type Token, Tokenizer, type TokenizerExtension, type Tokens } from "marked";
+import { Marked, type Token, type TokenizerExtension, type Tokens } from "marked";
 import { renderLatex } from "../latex.ts";
 import { getCapabilities, hyperlink, isImageLine } from "../terminal-image.ts";
 import type { Component } from "../tui.ts";
 import { applyBackgroundToLine, visibleWidth, wrapTextWithAnsi } from "../utils.ts";
 
 const STRICT_STRIKETHROUGH_REGEX = /^(~~)(?=[^\s~])((?:\\.|[^\\])*?(?:\\.|[^\s~\\]))\1(?=[^~]|$)/;
-
-class StrictStrikethroughTokenizer extends Tokenizer {
-	override del(src: string): Tokens.Del | undefined {
-		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
-		if (!match) {
-			return undefined;
-		}
-
-		const text = match[2];
-		return {
-			type: "del",
-			raw: match[0],
-			text,
-			tokens: this.lexer.inlineTokens(text),
-		};
-	}
-}
 
 interface LatexToken extends Tokens.Generic {
 	type: "latex" | "latexBlock";
@@ -124,20 +107,20 @@ const LATEX_MARKDOWN_EXTENSIONS: readonly TokenizerExtension[] = [
 	{
 		name: "latexBlock",
 		level: "block",
-		start(source) {
-			const match = /(?:^|\n) {0,3}(?:\$\$|\\\[)/.exec(source);
-			return match ? match.index + (match[0].startsWith("\n") ? 1 : 0) : undefined;
+		start(source: string): number {
+			const idx = source.search(/(?:^|\n) {0,3}(?:\$\$|\\\[)/);
+			return idx < 0 ? -1 : idx + (source.charAt(idx) === "\n" ? 1 : 0);
 		},
 		tokenizer: tokenizeBlockLatex,
 	},
 	{
 		name: "latex",
 		level: "inline",
-		start(source) {
+		start(source: string): number {
 			const indices = [source.indexOf("$"), source.indexOf("\\("), source.indexOf("\\[")].filter(
 				(index) => index >= 0,
 			);
-			return indices.length > 0 ? Math.min(...indices) : undefined;
+			return indices.length > 0 ? Math.min(...indices) : -1;
 		},
 		tokenizer: tokenizeInlineLatex,
 	},
@@ -169,10 +152,30 @@ function trimPartialClosingFences(tokens: readonly Token[]): void {
 }
 
 const markdownParser = new Marked();
-markdownParser.setOptions({
-	tokenizer: new StrictStrikethroughTokenizer(),
-});
-markdownParser.use({ extensions: [...LATEX_MARKDOWN_EXTENSIONS] });
+
+// scriptc cannot lower `class extends Tokenizer` (marked's Tokenizer is an
+// ambient class) nor `this` in callbacks. marked's Lexer assigns
+// `tokenizer.lexer` to the active Lexer for each parse, so overriding `del`
+// on a Tokenizer instance grabbed from `defaults` is equivalent to the
+// previous subclass override (which read `this.lexer.inlineTokens`).
+markdownParser.use({ tokenizer: {} });
+const markdownTokenizer = markdownParser.defaults.tokenizer;
+if (markdownTokenizer) {
+	markdownTokenizer.del = (src: string): Tokens.Del | undefined => {
+		const match = STRICT_STRIKETHROUGH_REGEX.exec(src);
+		if (!match) {
+			return undefined;
+		}
+		const text = match[2];
+		return {
+			type: "del",
+			raw: match[0],
+			text,
+			tokens: markdownTokenizer.lexer.inlineTokens(text),
+		};
+	};
+}
+markdownParser.use({ extensions: LATEX_MARKDOWN_EXTENSIONS.slice() });
 
 /**
  * Default text styling for markdown content.

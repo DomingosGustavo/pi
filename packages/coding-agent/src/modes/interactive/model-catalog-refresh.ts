@@ -4,10 +4,15 @@ import { raceWithAbortSignal } from "../../utils/abort.ts";
 
 type ModelCatalogRuntime = Pick<ModelRuntime, "refresh">;
 
-interface ActiveModelCatalogRefresh {
+class ActiveModelCatalogRefresh {
 	controller: AbortController;
 	promise: Promise<ModelsRefreshResult>;
 	waiters: number;
+	constructor(controller: AbortController, promise: Promise<ModelsRefreshResult>) {
+		this.controller = controller;
+		this.promise = promise;
+		this.waiters = 0;
+	}
 }
 
 class ModelCatalogRefreshCoordinator {
@@ -39,7 +44,7 @@ class ModelCatalogRefreshCoordinator {
 					this.activeById.delete(runtimeId);
 				}
 			});
-			created = { controller, promise, waiters: 0 };
+			created = new ActiveModelCatalogRefresh(controller, promise);
 			active = created;
 			this.activeById.set(runtimeId, active);
 		}

@@ -281,6 +281,19 @@ const shimWalk = (dir) => {
 };
 shimWalk(OUT);
 
+function patchTelemetry(OUT) {
+	const p = join(OUT, "packages/agent/src/harness/telemetry.ts");
+	let s = readFileSync(p, "utf8");
+	const before = s;
+	s = s.replace(/ as const satisfies TelemetrySchemaDefinition/g, " as const");
+	s = s.replace(
+		/(\t\t\t\t"pi\.operation\.outcome": \{\n[\s\S]*?\n\t\t\t\t\},\n)(\t\t\t\t\.\.\.operationErrorAttributes,\n)/g,
+		"$2$1",
+	);
+	if (s !== before) writeFileSync(p, s);
+}
+
+patchTelemetry(OUT);
 stageText(OUT, ROOT);
 stageLazy(OUT);
 
