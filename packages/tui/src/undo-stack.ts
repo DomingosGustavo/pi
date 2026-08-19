@@ -31,7 +31,8 @@ export class UndoStack<S> {
 
 	/** Remove all snapshots. */
 	clear(): void {
-		this.stack.length = 0;
+		// scriptc: assigning to `.length` is an assignment to a non-variable (SC1090).
+		this.stack = [];
 	}
 
 	get length(): number {

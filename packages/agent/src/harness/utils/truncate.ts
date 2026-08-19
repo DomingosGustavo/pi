@@ -1,4 +1,3 @@
-import { Buffer as nodeBuffer } from "node:buffer";
 /**
  * Shared truncation utilities for tool outputs.
  *
@@ -45,16 +44,11 @@ export interface TruncationOptions {
 	maxBytes?: number;
 }
 
-interface RuntimeBuffer {
-	byteLength(content: string, encoding: "utf8"): number;
-}
-
-// scriptc: `globalThis` has no lowering (SC2020); node:buffer is a supported builtin.
-const runtimeBuffer: RuntimeBuffer | undefined = nodeBuffer;
+// scriptc: neither `globalThis` nor `buffer.Buffer` has a lowering (SC2020). The
+// manual UTF-8 measurement below is exact, so it is used unconditionally.
 const nonAsciiPattern = /[^\x00-\x7f]/;
 
 function utf8ByteLength(content: string): number {
-	if (runtimeBuffer) return runtimeBuffer.byteLength(content, "utf8");
 
 	const firstNonAscii = content.search(nonAsciiPattern);
 	if (firstNonAscii === -1) return content.length;

@@ -146,6 +146,15 @@ walk(OUT);
 // tier — a hard error with no island fallback. Vendoring chalk's source into the stage
 // tree and rewriting those specifiers to relative paths keeps chalk's behaviour exactly
 // (same code), so colour output is not lost.
+// Vendored as program source rather than served from the island.
+// chalk: its package.json "imports" (#ansi-styles) are unresolvable in either tier.
+// marked: pi-tui subclasses its Tokenizer, and `extends` requires the base class to
+//         be declared in the program (SC1090); --npm-static refuses it ("inferred
+//         export surface breaks 5 import sites").
+// marked was tried here too (pi-tui subclasses its Tokenizer) but vendoring does not
+// help: type resolution still goes through marked.d.ts, so scriptc sees an AMBIENT
+// class declaration and `extends` stays SC1090. It needs either a compiler change or
+// a pi-side refactor away from subclassing.
 const VENDOR = { chalk: "vendor/chalk" };
 for (const [pkg, dest] of Object.entries(VENDOR)) {
 	const from = join(ROOT, "node_modules", pkg);
@@ -184,7 +193,23 @@ for (const [pkg, dest] of Object.entries(VENDOR)) {
 	rewriteHash(to);
 
 	// point staged pi sources at the vendored copy
-	const entry = join(to, JSON.parse(readFileSync(join(to, "package.json"), "utf8")).main ?? "index.js");
+	const pkgJson = JSON.parse(readFileSync(join(to, "package.json"), "utf8"));
+	const entry = join(to, pkgJson.main ?? "index.js");
+
+	// Importing the entry FILE (not the package name) means TypeScript looks for a
+	// sibling declaration file: `marked.esm.js` -> `marked.esm.d.ts`. Packages whose
+	// types live elsewhere (marked ships `lib/marked.d.ts`) need that bridge, or every
+	// type-only import from the vendored copy fails.
+	const typesRel = pkgJson.types ?? pkgJson.typings;
+	if (typeof typesRel === "string") {
+		const sibling = entry.replace(/\.[cm]?js$/, ".d.ts");
+		const typesAbs = join(to, typesRel);
+		if (sibling !== typesAbs) {
+			let spec = relative(dirname(sibling), typesAbs).split(sep).join("/").replace(/\.d\.ts$/, "");
+			if (!spec.startsWith(".")) spec = `./${spec}`;
+			writeFileSync(sibling, `export * from "${spec}";\n`);
+		}
+	}
 	const pointAt = (dir) => {
 		for (const e of readdirSync(dir, { withFileTypes: true })) {
 			const p = join(dir, e.name);
