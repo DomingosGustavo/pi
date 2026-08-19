@@ -392,7 +392,9 @@ export const stream: StreamFunction<"openai-codex-responses", OpenAICodexRespons
 						response = await (options?.fetch ?? globalThis.fetch)(resolveCodexUrl(model.baseUrl), {
 							method: "POST",
 							headers: sseHeaders,
-							body: sseBody as BodyInit,
+							// type-only narrowing: erased at runtime, and fetch accepts both arms.
+							// Keeps pi's build lib (no DOM `BodyInit`) and scriptc's checker happy.
+							body: sseBody as string,
 							signal: combinedSignal.signal,
 						});
 					} catch (error) {
