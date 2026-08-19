@@ -219,6 +219,19 @@ interface EditorSnapshot {
 	pasteCounter: number;
 }
 
+/** Detached copy of a snapshot (replaces structuredClone for the scriptc port). */
+function cloneEditorSnapshot(snapshot: EditorSnapshot): EditorSnapshot {
+	return {
+		state: {
+			lines: snapshot.state.lines.slice(),
+			cursorLine: snapshot.state.cursorLine,
+			cursorCol: snapshot.state.cursorCol,
+		},
+		pastes: new Map(snapshot.pastes),
+		pasteCounter: snapshot.pasteCounter,
+	};
+}
+
 interface LayoutLine {
 	text: string;
 	hasCursor: boolean;
@@ -336,7 +349,7 @@ export class Editor implements Component, Focusable {
 	private snappedFromCursorCol: number | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<EditorSnapshot>();
+	private undoStack = new UndoStack<EditorSnapshot>(cloneEditorSnapshot);
 
 	public onSubmit?: (text: string) => void;
 	public onChange?: (text: string) => void;

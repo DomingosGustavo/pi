@@ -8,13 +8,14 @@ function startNoopSpan<T>(_options: SpanOptions, callback: (span: TelemetrySpan)
 	}
 }
 
-const noopTelemetrySpan: TelemetrySpan = {
+// scriptc: Object.freeze of a possibly-aliased value has no lowering (SC2020);
+// freezing the literal in place is equivalent.
+const noopTelemetrySpan: TelemetrySpan = Object.freeze({
 	startSpan: startNoopSpan,
 	addEvent: () => {},
 	setAttributes: () => {},
 	setStatus: () => {},
-};
-Object.freeze(noopTelemetrySpan);
+});
 
 /** Shared telemetry context used when an application does not provide one. */
 export const NOOP_TELEMETRY_CONTEXT: TelemetryContext = noopTelemetrySpan;

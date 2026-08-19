@@ -6,13 +6,16 @@ type MutationQueueState = {
 	registration: Promise<void>;
 };
 
-const states = new WeakMap<ExecutionEnv, MutationQueueState>();
+// scriptc: WeakMap has no lowering (SC2020). The state is stored on the env itself,
+// which has exactly the WeakMap lifetime (collected with the env, never leaked).
+type EnvWithMutationState = ExecutionEnv & { __piMutationQueueState?: MutationQueueState };
 
 function getState(env: ExecutionEnv): MutationQueueState {
-	let state = states.get(env);
+	const holder = env as EnvWithMutationState;
+	let state = holder.__piMutationQueueState;
 	if (!state) {
 		state = { queues: new Map(), registration: Promise.resolve() };
-		states.set(env, state);
+		holder.__piMutationQueueState = state;
 	}
 	return state;
 }

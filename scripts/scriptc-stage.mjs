@@ -21,6 +21,7 @@
  */
 import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { stageLazy } from "./scriptc-stage-lazy.mjs";
 import { stageText } from "./scriptc-stage-text.mjs";
 
 const ROOT = resolve(dirname(process.argv[1]), "..");
@@ -215,8 +216,22 @@ for (const [pkg, dest] of Object.entries(VENDOR)) {
 const SHIM_DIR = join(OUT, "vendor/island-module");
 mkdirSync(SHIM_DIR, { recursive: true });
 writeFileSync(join(SHIM_DIR, "package.json"), JSON.stringify({ name: "island-module", version: "1.0.0", main: "index.js", types: "index.d.ts" }, null, 2));
-writeFileSync(join(SHIM_DIR, "index.js"), 'const mod = require("module");\nmodule.exports = { createRequire: mod.createRequire };\n');
-writeFileSync(join(SHIM_DIR, "index.d.ts"), "export interface IslandRequire {\n\t(id: string): unknown;\n\tresolve(id: string): string;\n}\nexport declare function createRequire(path: string | URL): IslandRequire;\n");
+writeFileSync(
+	join(SHIM_DIR, "index.js"),
+	'const mod = require("module");\n' +
+		"module.exports = {\n" +
+		"  createRequire: mod.createRequire,\n" +
+		"  islandRequire: (id, from) => mod.createRequire(from)(id),\n" +
+		"  islandResolve: (id, from) => mod.createRequire(from).resolve(id),\n" +
+		"};\n",
+);
+writeFileSync(
+	join(SHIM_DIR, "index.d.ts"),
+	"export interface IslandRequire {\n\t(id: string): unknown;\n\tresolve(id: string): string;\n}\n" +
+		"export declare function createRequire(path: string | URL): IslandRequire;\n" +
+		"export declare function islandRequire(id: string, from: string): unknown;\n" +
+		"export declare function islandResolve(id: string, from: string): string;\n",
+);
 
 let shimRewrites = 0;
 const shimWalk = (dir) => {
@@ -227,10 +242,10 @@ const shimWalk = (dir) => {
 		} else if (p.endsWith(".ts")) {
 			let s = readFileSync(p, "utf8");
 			const before = s;
-			s = s.replace(/(import\s*\{[^}]*\bcreateRequire\b[^}]*\}\s*from\s*)("|')(node:module|module)\2/g, (m, kw, q) => {
+			s = s.replace(/import\s*\{[^}]*\bcreateRequire\b[^}]*\}\s*from\s*("|')(node:module|module)\1/g, (m, q) => {
 				let rel = relative(dirname(p), join(SHIM_DIR, "index.js")).split(sep).join("/");
 				if (!rel.startsWith(".")) rel = `./${rel}`;
-				return `${kw}${q}${rel.replace(/\.js$/, ".js")}${q}`;
+				return `import { createRequire, islandRequire } from ${q}${rel}${q}`;
 			});
 			if (s !== before) {
 				writeFileSync(p, s);
@@ -241,7 +256,8 @@ const shimWalk = (dir) => {
 };
 shimWalk(OUT);
 
-stageText(OUT);
+stageText(OUT, ROOT);
+stageLazy(OUT);
 
 console.log(`staged  -> ${relative(ROOT, OUT)}`);
 console.log(`routed createRequire through the island in ${shimRewrites} modules`);

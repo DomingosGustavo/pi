@@ -6,10 +6,22 @@
  */
 export class UndoStack<S> {
 	private stack: S[] = [];
+	private readonly clone: (state: S) => S;
+
+	/**
+	 * @param clone produces a detached copy of a snapshot.
+	 *
+	 * scriptc: `structuredClone` has no lowering for these shapes (SC2020) and a
+	 * generic deep clone needs runtime reflection, so each instantiation supplies a
+	 * concrete cloner for its own snapshot type.
+	 */
+	constructor(clone: (state: S) => S) {
+		this.clone = clone;
+	}
 
 	/** Push a deep clone of the given state onto the stack. */
 	push(state: S): void {
-		this.stack.push(structuredClone(state));
+		this.stack.push(this.clone(state));
 	}
 
 	/** Pop and return the most recent snapshot, or undefined if empty. */

@@ -21,6 +21,17 @@ import { dirname, join, relative, sep } from "node:path";
 
 const ISLAND_PKG = "vendor/island-text";
 
+const LAZY_SEGMENTERS = `// Island bindings may be CALLED from a named program function, but not captured in an
+// inline closure (SC1090: "the reference to 'x' (a binding form with no lowering)").
+function segmentGraphemesLocal(input: string): PiSegmentData[] {
+	return segmentGraphemes(input);
+}
+function segmentWordsLocal(input: string): PiSegmentData[] {
+	return segmentWords(input);
+}
+const graphemeSegmenter: PiSegmenter = { segment: segmentGraphemesLocal };
+const wordSegmenter: PiSegmenter = { segment: segmentWordsLocal };`;
+
 const GLOBALS_JS = `// quickjs (the island engine) ships no Intl. The @formatjs polyfill expects the
 // namespace to exist and calls Intl.getCanonicalLocales during construction.
 if (typeof globalThis.Intl === "undefined") globalThis.Intl = {};
@@ -87,8 +98,8 @@ export declare function stripLeadingNonPrinting(s: string): string;
 `;
 
 /** Write the island helper package into the staging tree. */
-function writeIslandPackage(OUT) {
-	const dir = join(OUT, ISLAND_PKG);
+function writeIslandPackage(ROOT) {
+	const dir = join(ROOT, "node_modules", "island-text");
 	mkdirSync(dir, { recursive: true });
 	writeFileSync(
 		join(dir, "package.json"),
@@ -110,7 +121,7 @@ const rel = (from, to) => {
 function patchUtils(OUT) {
 	const p = join(OUT, "packages/tui/src/utils.ts");
 	let s = readFileSync(p, "utf8");
-	const helper = rel(p, join(OUT, ISLAND_PKG, "index.js"));
+	const helper = "island-text";
 
 	s =
 		`import {\n\tisMarkChar,\n\tisNonPrintingChar,\n\tisRgiEmoji,\n\tisTerminalSpacingMark,\n\tisZeroWidth,\n\ttype PiSegmentData,\n\tsegmentGraphemes,\n\tsegmentWords,\n\tstripLeadingNonPrinting,\n} from "${helper}";\n` +
@@ -121,13 +132,10 @@ function patchUtils(OUT) {
 
 	// segmenter instances -> island-backed objects
 	s = s.replace(
-		'const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });',
-		"const graphemeSegmenter: PiSegmenter = { segment: (input: string): PiSegmentData[] => segmentGraphemes(input) };",
+		'const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });\nconst wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });',
+		LAZY_SEGMENTERS,
 	);
-	s = s.replace(
-		'const wordSegmenter = new Intl.Segmenter(undefined, { granularity: "word" });',
-		"const wordSegmenter: PiSegmenter = { segment: (input: string): PiSegmentData[] => segmentWords(input) };",
-	);
+
 
 	// drop the v-flag regex declarations (their logic now lives in the island)
 	const dropRegex = [
@@ -183,8 +191,8 @@ function rewriteTypes(OUT) {
 	return count;
 }
 
-export function stageText(OUT) {
-	writeIslandPackage(OUT);
+export function stageText(OUT, ROOT) {
+	writeIslandPackage(ROOT);
 	patchUtils(OUT);
 	const n = rewriteTypes(OUT);
 	console.log(`text: island segmenter + v-flag regexes wired; Intl types rewritten in ${n} modules`);

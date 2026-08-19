@@ -1,3 +1,4 @@
+import { Buffer as nodeBuffer } from "node:buffer";
 /**
  * Shared truncation utilities for tool outputs.
  *
@@ -48,7 +49,8 @@ interface RuntimeBuffer {
 	byteLength(content: string, encoding: "utf8"): number;
 }
 
-const runtimeBuffer = (globalThis as { Buffer?: RuntimeBuffer }).Buffer;
+// scriptc: `globalThis` has no lowering (SC2020); node:buffer is a supported builtin.
+const runtimeBuffer: RuntimeBuffer | undefined = nodeBuffer;
 const nonAsciiPattern = /[^\x00-\x7f]/;
 
 function utf8ByteLength(content: string): number {

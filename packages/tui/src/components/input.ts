@@ -13,6 +13,11 @@ interface InputState {
 	cursor: number;
 }
 
+/** Detached copy (replaces structuredClone for the scriptc port). */
+function cloneInputState(state: InputState): InputState {
+	return { value: state.value, cursor: state.cursor };
+}
+
 /**
  * Input component - single-line text input with horizontal scrolling
  */
@@ -34,7 +39,7 @@ export class Input implements Component, Focusable {
 	private lastAction: "kill" | "yank" | "type-word" | null = null;
 
 	// Undo support
-	private undoStack = new UndoStack<InputState>();
+	private undoStack = new UndoStack<InputState>(cloneInputState);
 
 	getValue(): string {
 		return this.value;
