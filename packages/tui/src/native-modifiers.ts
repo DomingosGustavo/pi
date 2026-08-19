@@ -1,11 +1,8 @@
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 
-// scriptc port: 'module.createRequire' has no lowering (SC2020) and a compiled binary
-// cannot load native .node addons. These helpers are Windows-only niceties.
-const cjsRequire = (_id: string): unknown => {
-	throw new Error("native module unavailable in a compiled binary");
-};
+const cjsRequire = createRequire(import.meta.url);
 
 export type ModifierKey = "shift" | "command" | "control" | "option";
 
@@ -36,7 +33,7 @@ function loadNativeModifiersHelper(): NativeModifiersHelper | undefined {
 		return undefined;
 	}
 
-	const moduleDir = path.dirname(process.argv[1]);
+	const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 	const candidates = [
 		path.join(moduleDir, "..", nativePath),
 		path.join(moduleDir, nativePath),

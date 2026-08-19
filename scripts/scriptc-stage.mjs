@@ -1,0 +1,251 @@
+#!/usr/bin/env node
+/**
+ * Stage pi's sources for a scriptc build.
+ *
+ * scriptc does not adopt tsconfig "paths", so `@earendil-works/pi-*` imports resolve
+ * through node_modules to each package's built dist JS. That makes every workspace
+ * package an opaque npm package served by the --dynamic island, and the island boundary
+ * is contagious at the TYPE level: island-typed values lose static stdlib lowerings,
+ * cannot be subclassed (SC1090), and cannot width-coerce (SC2002).
+ *
+ * Every workspace package compiles cleanly from source on its own:
+ *   tui 95% · agent 93% · ai 90% · telemetry 88% · protocol 78% · client 100%  (0 errors each)
+ *
+ * So we copy the sources into a staging tree and rewrite workspace specifiers to
+ * relative paths, making them ordinary program modules. Nothing is removed or stubbed —
+ * this is purely a resolution change, so no runtime feature is lost.
+ *
+ * pi's own build is untouched: it still compiles the real packages/ tree.
+ *
+ *   node scripts/scriptc-stage.mjs [--out .scriptc-stage]
+ */
+import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+
+const ROOT = resolve(dirname(process.argv[1]), "..");
+const outArg = process.argv.indexOf("--out");
+const OUT = resolve(ROOT, outArg === -1 ? ".scriptc-stage" : process.argv[outArg + 1]);
+
+// Packages to LEAVE as package imports (served by the --dynamic island) instead of
+// staging them as program source. Islanding keeps a package's real JS running, so no
+// feature is lost — it trades static compilation for the island's engine.
+//   e.g. --island @earendil-works/pi-ai
+// pi-ai is the natural candidate: compiled as source it contributes ~500 of 564
+// diagnostics (provider SDKs are `any`-heavy streaming code), versus ~60 for the rest.
+const islandArg = process.argv.indexOf("--island");
+const ISLAND = new Set(islandArg === -1 ? [] : process.argv[islandArg + 1].split(",").map((s) => s.trim()));
+const isIslanded = (spec) => [...ISLAND].some((p) => spec === p || spec.startsWith(`${p}/`));
+
+/** package name -> directory holding its src (relative to repo root) */
+const PKG_DIRS = {
+	"@earendil-works/pi-tui": "packages/tui",
+	"@earendil-works/pi-ai": "packages/ai",
+	"@earendil-works/pi-agent-core": "packages/agent",
+	"@earendil-works/pi-protocol": "packages/protocol",
+	"@earendil-works/pi-client": "packages/client",
+	"@earendil-works/pi-telemetry": "packages/telemetry",
+	"@earendil-works/pi-coding-agent": "packages/coding-agent",
+	"@earendil-works/pi-session-backend-sqlite-node": "packages/session-backends/sqlite-node",
+};
+
+/** explicit subpath overrides (from the repo's tsconfig "paths") */
+const SUBPATH_OVERRIDES = {
+	"@earendil-works/pi-agent-core/session/testing": "packages/agent/src/harness/session/testing/index.ts",
+	"@earendil-works/pi-telemetry/testing": "packages/telemetry/src/testing/index.ts",
+	"@earendil-works/pi-coding-agent/hooks": "packages/coding-agent/src/core/hooks/index.ts",
+};
+
+/** Resolve a workspace specifier to a repo-relative .ts file. */
+function resolveSpecifier(spec) {
+	if (SUBPATH_OVERRIDES[spec]) return SUBPATH_OVERRIDES[spec];
+	if (PKG_DIRS[spec]) return `${PKG_DIRS[spec]}/src/index.ts`;
+	for (const [pkg, dir] of Object.entries(PKG_DIRS)) {
+		if (!spec.startsWith(`${pkg}/`)) continue;
+		const sub = spec.slice(pkg.length + 1);
+		// try <src>/<sub>.ts, <src>/<sub>/index.ts, and providers/<sub>.ts (pi-ai)
+		for (const cand of [`${dir}/src/${sub}.ts`, `${dir}/src/${sub}/index.ts`, `${dir}/src/providers/${sub}.ts`]) {
+			try {
+				if (statSync(join(ROOT, cand)).isFile()) return cand;
+			} catch {}
+		}
+		return null;
+	}
+	return null;
+}
+
+// ── stage the sources ───────────────────────────────────────────────────────
+rmSync(OUT, { recursive: true, force: true });
+mkdirSync(OUT, { recursive: true });
+const dirs = [...new Set(Object.values(PKG_DIRS))];
+const islandDirs = new Set([...ISLAND].map((p) => PKG_DIRS[p]).filter(Boolean));
+for (const d of dirs.filter((d) => !islandDirs.has(d))) {
+	const from = join(ROOT, d, "src");
+	try {
+		if (!statSync(from).isDirectory()) continue;
+	} catch {
+		continue;
+	}
+	cpSync(from, join(OUT, d, "src"), { recursive: true });
+}
+
+// ── rewrite workspace specifiers to relative paths ──────────────────────────
+// `from "pkg"`, `import("pkg")` and — critically — `declare module "pkg" { … }`.
+// pi augments package types (e.g. `declare module "@earendil-works/pi-tui" {
+// interface Keybindings extends AppKeybindings {} }`). Module augmentation is keyed by
+// module identity, so if the imports become relative paths and the augmentation does not,
+// the augmentation silently stops applying (114 SC0001 errors: '"app.exit"' not
+// assignable to KeyId). Both must be rewritten together.
+const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|\bdeclare\s+module\s+)("|')(@earendil-works\/[^"']+)\2/g;
+let files = 0;
+let rewrites = 0;
+let metaUrlRewrites = 0;
+const unresolved = new Map();
+
+function walk(dir) {
+	for (const e of readdirSync(dir, { withFileTypes: true })) {
+		const p = join(dir, e.name);
+		if (e.isDirectory()) {
+			walk(p);
+		} else if (e.name.endsWith(".ts") || e.name.endsWith(".tsx")) {
+			let src = readFileSync(p, "utf8");
+			const before = src;
+			// `import.meta.url` has no scriptc lowering (SC2020). At staging time each
+			// module's own URL is known, so substitute the per-module literal. This is
+			// exact (unlike process.argv[1], which is the process entry, not the module),
+			// so self-location keeps working in non-entry modules.
+			if (src.includes("import.meta.url")) {
+				const url = `file://${p}`;
+				src = src.replace(/\bimport\.meta\.url\b/g, JSON.stringify(url));
+				metaUrlRewrites++;
+			}
+			src = src.replace(SPEC_RE, (m, kw, q, spec) => {
+				if (isIslanded(spec)) return m;
+				const target = resolveSpecifier(spec);
+				if (!target) {
+					unresolved.set(spec, (unresolved.get(spec) ?? 0) + 1);
+					return m;
+				}
+				let rel = relative(dirname(p), join(OUT, target)).split(sep).join("/");
+				if (!rel.startsWith(".")) rel = `./${rel}`;
+				rewrites++;
+				return `${kw}${q}${rel}${q}`;
+			});
+			if (src !== before) {
+				writeFileSync(p, src);
+				files++;
+			}
+		}
+	}
+}
+walk(OUT);
+
+// ── vendor packages that use package.json "imports" (#specifiers) ────────────
+// scriptc cannot resolve `#ansi-styles` / `#supports-color` (SC2030/SC1010) in either
+// tier — a hard error with no island fallback. Vendoring chalk's source into the stage
+// tree and rewriting those specifiers to relative paths keeps chalk's behaviour exactly
+// (same code), so colour output is not lost.
+const VENDOR = { chalk: "vendor/chalk" };
+for (const [pkg, dest] of Object.entries(VENDOR)) {
+	const from = join(ROOT, "node_modules", pkg);
+	try {
+		if (!statSync(from).isDirectory()) continue;
+	} catch {
+		continue;
+	}
+	const to = join(OUT, dest);
+	cpSync(from, to, { recursive: true });
+
+	// rewrite the package's own "#x" imports to relative paths, using its imports map
+	let importsMap = {};
+	try {
+		importsMap = JSON.parse(readFileSync(join(to, "package.json"), "utf8")).imports ?? {};
+	} catch {}
+	const rewriteHash = (dir) => {
+		for (const e of readdirSync(dir, { withFileTypes: true })) {
+			const p = join(dir, e.name);
+			if (e.isDirectory()) {
+				rewriteHash(p);
+			} else if (p.endsWith(".js")) {
+				let s = readFileSync(p, "utf8");
+				const before = s;
+				s = s.replace(/(\bfrom\s*)("|')(#[^"']+)\2/g, (m, kw, q, spec) => {
+					const target = importsMap[spec];
+					if (typeof target !== "string") return m;
+					let rel = relative(dirname(p), join(to, target)).split(sep).join("/");
+					if (!rel.startsWith(".")) rel = `./${rel}`;
+					return `${kw}${q}${rel}${q}`;
+				});
+				if (s !== before) writeFileSync(p, s);
+			}
+		}
+	};
+	rewriteHash(to);
+
+	// point staged pi sources at the vendored copy
+	const entry = join(to, JSON.parse(readFileSync(join(to, "package.json"), "utf8")).main ?? "index.js");
+	const pointAt = (dir) => {
+		for (const e of readdirSync(dir, { withFileTypes: true })) {
+			const p = join(dir, e.name);
+			if (e.isDirectory()) {
+				if (p !== join(OUT, "vendor")) pointAt(p);
+			} else if (p.endsWith(".ts")) {
+				let s = readFileSync(p, "utf8");
+				const re = new RegExp(`(\\bfrom\\s*)("|')(${pkg})\\2`, "g");
+				const before = s;
+				s = s.replace(re, (m, kw, q) => {
+					let rel = relative(dirname(p), entry).split(sep).join("/");
+					if (!rel.startsWith(".")) rel = `./${rel}`;
+					return `${kw}${q}${rel}${q}`;
+				});
+				if (s !== before) writeFileSync(p, s);
+			}
+		}
+	};
+	pointAt(OUT);
+	console.log(`vendored ${pkg} -> ${dest} (package.json "imports" specifiers rewritten)`);
+}
+
+// ── island shim for node:module ─────────────────────────────────────────────
+// `module.createRequire` has no static lowering (SC2020), but "module" IS one of the
+// island's shimmed builtins. Routing the import through a vendored CJS package moves the
+// call into the island, so the code compiles and keeps its real behaviour there instead
+// of being deleted. (Loading native .node addons still fails at runtime — as it does in
+// pi's own Bun binary, pi#6250 — and pi already try/catches that path.)
+const SHIM_DIR = join(OUT, "vendor/island-module");
+mkdirSync(SHIM_DIR, { recursive: true });
+writeFileSync(join(SHIM_DIR, "package.json"), JSON.stringify({ name: "island-module", version: "1.0.0", main: "index.js", types: "index.d.ts" }, null, 2));
+writeFileSync(join(SHIM_DIR, "index.js"), 'const mod = require("module");\nmodule.exports = { createRequire: mod.createRequire };\n');
+writeFileSync(join(SHIM_DIR, "index.d.ts"), "export interface IslandRequire {\n\t(id: string): unknown;\n\tresolve(id: string): string;\n}\nexport declare function createRequire(path: string | URL): IslandRequire;\n");
+
+let shimRewrites = 0;
+const shimWalk = (dir) => {
+	for (const e of readdirSync(dir, { withFileTypes: true })) {
+		const p = join(dir, e.name);
+		if (e.isDirectory()) {
+			if (p !== join(OUT, "vendor")) shimWalk(p);
+		} else if (p.endsWith(".ts")) {
+			let s = readFileSync(p, "utf8");
+			const before = s;
+			s = s.replace(/(import\s*\{[^}]*\bcreateRequire\b[^}]*\}\s*from\s*)("|')(node:module|module)\2/g, (m, kw, q) => {
+				let rel = relative(dirname(p), join(SHIM_DIR, "index.js")).split(sep).join("/");
+				if (!rel.startsWith(".")) rel = `./${rel}`;
+				return `${kw}${q}${rel.replace(/\.js$/, ".js")}${q}`;
+			});
+			if (s !== before) {
+				writeFileSync(p, s);
+				shimRewrites++;
+			}
+		}
+	}
+};
+shimWalk(OUT);
+
+console.log(`staged  -> ${relative(ROOT, OUT)}`);
+console.log(`routed createRequire through the island in ${shimRewrites} modules`);
+console.log(`rewrote ${rewrites} workspace specifiers across ${files} files`);
+console.log(`rewrote import.meta.url in ${metaUrlRewrites} modules (per-module literal)`);
+if (unresolved.size) {
+	console.log("unresolved specifiers (left as package imports -> island):");
+	for (const [s, n] of [...unresolved].sort((a, b) => b[1] - a[1])) console.log(`   ${n}x  ${s}`);
+}
+console.log(`\nbuild with:\n  SCRIPTC_CC=zigcc scriptc build ${relative(ROOT, OUT)}/packages/coding-agent/src/cli.ts --dynamic -o /tmp/pi-native`);

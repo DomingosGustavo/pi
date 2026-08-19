@@ -9,10 +9,7 @@ import { normalizePath } from "./utils/paths.ts";
 // Package Detection
 // =============================================================================
 
-// scriptc port: 'ImportMeta.url' has no lowering (SC2020). process.argv[1] lowers
-// and, for a single-file binary, is the executable path. Divergence: under Node this
-// is the ENTRY module's path, not this module's own path.
-const __filename = process.argv[1];
+const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
 /**
@@ -20,7 +17,7 @@ const __dirname = dirname(__filename);
  * Bun binaries have import.meta.url containing "$bunfs", "~BUN", or "%7EBUN" (Bun's virtual filesystem path)
  */
 export const isBunBinary =
-	__filename.includes("$bunfs") || __filename.includes("~BUN") || __filename.includes("%7EBUN");
+	import.meta.url.includes("$bunfs") || import.meta.url.includes("~BUN") || import.meta.url.includes("%7EBUN");
 
 /** Detect if Bun is the runtime (compiled binary or bun run) */
 export const isBunRuntime = !!process.versions.bun;

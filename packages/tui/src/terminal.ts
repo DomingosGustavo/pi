@@ -1,15 +1,12 @@
 import * as fs from "node:fs";
+import { createRequire } from "node:module";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { setKittyProtocolActive } from "./keys.ts";
 import { isNativeModifierPressed } from "./native-modifiers.ts";
 import { StdinBuffer } from "./stdin-buffer.ts";
 
-// scriptc port: 'module.createRequire' has no lowering (SC2020) and a compiled binary
-// cannot load native .node addons. These helpers are Windows-only niceties.
-const cjsRequire = (_id: string): unknown => {
-	throw new Error("native module unavailable in a compiled binary");
-};
+const cjsRequire = createRequire(import.meta.url);
 
 const TERMINAL_PROGRESS_KEEPALIVE_MS = 1000;
 const TERMINAL_PROGRESS_ACTIVE_SEQUENCE = "\x1b]9;4;3\x07";
@@ -375,7 +372,7 @@ export class ProcessTerminal implements Terminal {
 			// Dynamic require so non-Windows and bundled/browser paths never load the
 			// native helper. In the npm package native/ is next to dist/; in compiled
 			// binary archives native/ is copied next to the executable.
-			const moduleDir = path.dirname(process.argv[1]);
+			const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 			const nativePath = path.join("native", "win32", "prebuilds", `win32-${arch}`, "win32-console-mode.node");
 			const candidates = [
 				path.join(moduleDir, "..", nativePath),

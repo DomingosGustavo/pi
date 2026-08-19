@@ -33,7 +33,16 @@ import {
 // Preserve the pre-0.81 fallback for extensions that construct Agent instances
 // or invoke low-level agent loops without supplying streamFn. Agent core remains
 // provider-agnostic and does not import pi-ai/compat itself.
-setDefaultStreamFn(streamSimple);
+//
+// scriptc: this module participates in an ES module cycle, and a cycle is only
+// admitted when every body is declaration-only (SC1016). Installing the default
+// lazily keeps the identical behaviour for every entry point below.
+let defaultStreamFnInstalled = false;
+export function ensureDefaultStreamFn(): void {
+	if (defaultStreamFnInstalled) return;
+	defaultStreamFnInstalled = true;
+	setDefaultStreamFn(streamSimple);
+}
 
 export interface CreateAgentSessionOptions {
 	/** Working directory for project-local discovery. Default: process.cwd() */
@@ -169,6 +178,7 @@ function getDefaultAgentDir(): string {
  * ```
  */
 export async function createAgentSession(options: CreateAgentSessionOptions = {}): Promise<CreateAgentSessionResult> {
+	ensureDefaultStreamFn();
 	const cwd = resolvePath(options.cwd ?? options.sessionManager?.getCwd() ?? process.cwd());
 	const agentDir = options.agentDir ? resolvePath(options.agentDir) : getDefaultAgentDir();
 	let resourceLoader = options.resourceLoader;
