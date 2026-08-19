@@ -281,6 +281,51 @@ const shimWalk = (dir) => {
 };
 shimWalk(OUT);
 
+function patchKeybindingRecords(OUT) {
+	const replaceExpected = (source, file, oldText, newText) => {
+		if (!source.includes(oldText)) {
+			throw new Error(`scriptc-stage: expected keybinding replacement missing in ${file}: ${oldText}`);
+		}
+		return source.replace(oldText, newText);
+	};
+
+	const tuiPath = join(OUT, "packages/tui/src/keybindings.ts");
+	let tui = readFileSync(tuiPath, "utf8");
+	tui = replaceExpected(
+		tui,
+		tuiPath,
+		"export const TUI_KEYBINDINGS = {",
+		"export const TUI_KEYBINDINGS: KeybindingDefinitions = {",
+	);
+	tui = replaceExpected(tui, tuiPath, "} as const satisfies KeybindingDefinitions;", "};");
+	writeFileSync(tuiPath, tui);
+
+	const codingAgentPath = join(OUT, "packages/coding-agent/src/core/keybindings.ts");
+	let codingAgent = readFileSync(codingAgentPath, "utf8");
+	codingAgent = replaceExpected(
+		codingAgent,
+		codingAgentPath,
+		"export const KEYBINDINGS = {",
+		"export const KEYBINDINGS: KeybindingDefinitions = {",
+	);
+	codingAgent = replaceExpected(codingAgent, codingAgentPath, "} as const satisfies KeybindingDefinitions;", "};");
+	codingAgent = replaceExpected(
+		codingAgent,
+		codingAgentPath,
+		"const KEYBINDING_NAME_MIGRATIONS = {",
+		"const KEYBINDING_NAME_MIGRATIONS: Record<string, Keybinding> = {",
+	);
+	codingAgent = replaceExpected(
+		codingAgent,
+		codingAgentPath,
+		"} as const satisfies Record<string, Keybinding>;",
+		"};",
+	);
+	writeFileSync(codingAgentPath, codingAgent);
+}
+
+patchKeybindingRecords(OUT);
+
 function patchTelemetry(OUT) {
 	const p = join(OUT, "packages/agent/src/harness/telemetry.ts");
 	let s = readFileSync(p, "utf8");

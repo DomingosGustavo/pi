@@ -1,3 +1,6 @@
+// Pi workflow review artifact.
+// TRUST: this trusted JavaScript runs with full host privileges, not inside a sandbox.
+// globalThis, Function, dynamic import(), and host APIs may be reachable.
 export const meta = {
   name: "pi_scriptc_fixloop",
   description: "Research, propose, apply and verify fixes for the remaining scriptc errors until pi compiles to a native binary",
