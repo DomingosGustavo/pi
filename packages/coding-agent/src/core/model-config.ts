@@ -146,8 +146,9 @@ const ModelCostRatesSchema = {
 	cacheWrite: Type.Number(),
 };
 const ModelCostTierSchema = Type.Object({
-	inputTokensAbove: Type.Number(),
+	// scriptc: spreads must come first in an object literal (SC1090).
 	...ModelCostRatesSchema,
+	inputTokensAbove: Type.Number(),
 });
 const ModelCostSchema = Type.Object({
 	...ModelCostRatesSchema,
