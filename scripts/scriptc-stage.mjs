@@ -340,6 +340,62 @@ function patchTelemetry(OUT) {
 }
 
 patchTelemetry(OUT);
+
+// scriptc port: the extension host surface is type-level only. scriptc must be able to
+// compile ExtensionFactory as a *stored value type* (it lives in InlineExtension[],
+// MainOptions and the loader cache), and it refuses any function type whose parameter
+// type does not itself compile. The real ExtensionAPI does not compile because `on` has
+// 34 overloads and `registerProvider` has 2, and overload sets have no lowering.
+//
+// Overloads are erased at runtime, so collapsing the *staged copy* changes no behaviour
+// and costs no feature: pi's real sources keep the full overload set, so extension
+// authors typechecking against the published SDK are unaffected. Only the throwaway
+// tree handed to scriptc is weakened.
+function patchExtensionHost(OUT) {
+	const expect = (source, file, oldText, newText) => {
+		if (!source.includes(oldText)) {
+			throw new Error(`scriptc-stage: expected extension-host replacement missing in ${file}: ${oldText}`);
+		}
+		return source.replace(oldText, newText);
+	};
+
+	const typesPath = join(OUT, "packages/coding-agent/src/core/extensions/types.ts");
+	let types = readFileSync(typesPath, "utf8");
+	types = expect(
+		types,
+		typesPath,
+		"export type ExtensionFactory = (pi: ExtensionAPI) => void | Promise<void>;",
+		"export type ExtensionFactory = (pi: any) => void | Promise<void>;",
+	);
+	writeFileSync(typesPath, types);
+
+	// Map values may be class instances but never functions, and the rejection is
+	// transitive (a *record* wrapping a function is rejected too). A one-field class
+	// wrapper is the only shape that keeps Map get/set/clear semantics exactly.
+	const loaderPath = join(OUT, "packages/coding-agent/src/core/extensions/loader.ts");
+	let loader = readFileSync(loaderPath, "utf8");
+	loader = expect(
+		loader,
+		loaderPath,
+		"const extensionCache = new Map<string, ExtensionFactory>();",
+		"class CachedExtensionFactory {\n\tconstructor(public readonly factory: ExtensionFactory) {}\n}\nconst extensionCache = new Map<string, CachedExtensionFactory>();",
+	);
+	loader = expect(
+		loader,
+		loaderPath,
+		"\t\tconst cachedFactory = extensionCache.get(extensionPath);\n\t\tif (cachedFactory) {\n\t\t\treturn cachedFactory;\n\t\t}",
+		"\t\tconst cachedFactory = extensionCache.get(extensionPath);\n\t\tif (cachedFactory) {\n\t\t\treturn cachedFactory.factory;\n\t\t}",
+	);
+	loader = expect(
+		loader,
+		loaderPath,
+		"\t\textensionCache.set(extensionPath, factory);",
+		"\t\textensionCache.set(extensionPath, new CachedExtensionFactory(factory));",
+	);
+	writeFileSync(loaderPath, loader);
+}
+
+patchExtensionHost(OUT);
 stageText(OUT, ROOT);
 stageLazy(OUT);
 stageHttp(OUT);
