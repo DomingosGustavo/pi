@@ -21,7 +21,7 @@ import { spawnSync } from "node:child_process";
 import { readdirSync, readFileSync, type Stats, statSync } from "node:fs";
 import { readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
 import { isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
-import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core/types";
+import type { AgentTool } from "@earendil-works/pi-agent-core";
 
 /*
  * Boundary notes (scriptc): the tool objects cross into the agent loop, whose
@@ -31,8 +31,6 @@ import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core/t
  * execute() takes unannotated params so contextual typing keeps them `any`.
  */
 import { truncateHead } from "../core/tools/truncate.ts";
-
-type TextResult = AgentToolResult<undefined>;
 
 function text(out: string): any {
 	return { content: [{ type: "text", text: out }], details: undefined };
@@ -154,7 +152,7 @@ const bashSchema: Record<string, unknown> = {
 
 const BASH_MAX_BYTES = 30_000;
 
-function bashWithTimeout(command: string, timeoutMs: number): TextResult {
+function bashWithTimeout(command: string, timeoutMs: number): any {
 	const r = spawnSync("bash", ["-c", command], { encoding: "utf8", timeout: timeoutMs });
 	let out = r.stdout || "";
 	if (r.stderr) out += (out ? "\n" : "") + r.stderr;

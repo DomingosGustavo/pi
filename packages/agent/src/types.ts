@@ -388,7 +388,7 @@ export interface AgentState {
 }
 
 /** Final or partial result produced by a tool. */
-export interface AgentToolResult<T = unknown> {
+export interface AgentToolResult<T = any> {
 	/** Text or image content returned to the model. */
 	content: (TextContent | ImageContent)[];
 	/** Arbitrary structured details for logs or UI rendering. */
@@ -410,7 +410,7 @@ export interface AgentToolResult<T = unknown> {
  * The callback is scoped to the current `execute()` invocation. Calls made after
  * the tool promise settles are ignored.
  */
-export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
+export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T>) => void;
 
 /** Tool definition used by the agent runtime. */
 export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = unknown> extends Tool<TParameters> {

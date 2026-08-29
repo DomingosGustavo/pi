@@ -10,7 +10,7 @@ import type { AssistantMessage, AssistantMessageEvent } from "./types.ts";
 // - no `[Symbol.asyncIterator]` / generator methods: computed method names
 //   and generator methods have no lowering yet. The compiled loop consumes
 //   `result()`. The generic type parameters are kept for typechecking hosts.
-export class EventStream<T = any, R = any> {
+export class EventStream {
 	private queue: any[] = [];
 	private waiting: Array<(value: any) => void> = [];
 	private done = false;
@@ -68,7 +68,7 @@ export class EventStream<T = any, R = any> {
 	}
 }
 
-export class AssistantMessageEventStream extends EventStream<AssistantMessageEvent, AssistantMessage> {
+export class AssistantMessageEventStream extends EventStream {
 	constructor() {
 		super(
 			(event: AssistantMessageEvent) => event.type === "done" || event.type === "error",

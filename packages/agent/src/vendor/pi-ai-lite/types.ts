@@ -117,7 +117,7 @@ export interface AssistantMessage {
 	timestamp: number;
 }
 
-export interface ToolResultMessage<TDetails = unknown> {
+export interface ToolResultMessage<TDetails = any> {
 	role: "toolResult";
 	toolCallId: string;
 	toolName: string;
@@ -203,8 +203,8 @@ export interface ProviderRequestOptions {
 	apiKey?: string;
 	fetch?: unknown;
 	env?: ProviderEnv;
-	onPayload?: (payload: unknown, model: Model) => unknown | undefined | Promise<unknown | undefined>;
-	onResponse?: (response: ProviderResponse, model: Model) => void | Promise<void>;
+	onPayload?: (payload: unknown, model: Model) => any;
+	onResponse?: (response: ProviderResponse, model: Model) => any;
 	headers?: Record<string, string | null>;
 	timeoutMs?: number;
 	maxRetries?: number;

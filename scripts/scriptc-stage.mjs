@@ -19,7 +19,7 @@
  *
  *   node scripts/scriptc-stage.mjs [--out .scriptc-stage]
  */
-import { cpSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { stageHttp } from "./scriptc-stage-http.mjs";
 import { stageLazy } from "./scriptc-stage-lazy.mjs";
@@ -106,8 +106,8 @@ const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|\bdeclare\s+module\s+)("|')(@earend
 // The agent loop's Model/Context/StreamFn types then originate in program
 // source, which removes the static/island type contagion that made the Agent
 // class uncompilable. Same import specifiers, so no call site changes.
-const PI_AI_LITE = "packages/coding-agent/src/scriptc-minimal/vendor/pi-ai-lite/index.ts";
-const TYPEBOX_LITE = "packages/coding-agent/src/scriptc-minimal/vendor/pi-ai-lite/typebox.ts";
+const PI_AI_LITE = "packages/agent/src/vendor/pi-ai-lite/index.ts";
+const TYPEBOX_LITE = "packages/agent/src/vendor/pi-ai-lite/typebox.ts";
 const isPiAiSpec = (spec) => spec === "@earendil-works/pi-ai" || spec.startsWith("@earendil-works/pi-ai/");
 const isTypeboxSpec = (spec) => spec === "typebox" || spec.startsWith("typebox/");
 let files = 0;
@@ -134,12 +134,35 @@ function walk(dir) {
 				// generic bookkeeping, so drop them in the staged tree.
 				const patchedAny = src
 					.replace(/\bModel<[^<>]*>/g, "Model")
+					.replace(/\bEventStream<[^<>]*>/g, "EventStream")
 					.replace(/\bAgentTool<any, any>/g, "AgentTool")
 					.replace(/\bAgentTool<any>/g, "AgentTool")
-					.replace(/\bToolResultMessage<any>/g, "ToolResultMessage")
-					.replace(/\bAgentToolResult<any>/g, "AgentToolResult")
 					.replace(/\bTool<any>/g, "Tool");
 				if (patchedAny !== src) src = patchedAny;
+			}
+			if (p.endsWith(join("agent", "src", "agent.ts"))) {
+				// scriptc-port: drop onPayload/onResponse plumbing from the staged
+				// tree. The minimal provider layer never observes them, and their
+				// callback unions don't survive the compiled graph.
+				const lines = src.split("\n");
+				const drop = (startMark, endMark) => {
+					const s0 = lines.indexOf(startMark);
+					if (s0 === -1) return;
+					const s1 = lines.indexOf(endMark, s0);
+					if (s1 === -1) return;
+					lines.splice(s0, s1 - s0 + 1);
+				};
+				drop("\t\tconst configuredOnPayload = options.onPayload;", "\t\t\t\t\t\tconfiguredOnPayload(payload, model);");
+				drop("\t\tconst configuredOnResponse = options.onResponse;", "\t\t\t\t};");
+				let filtered = lines.filter(
+					(l) =>
+						l !== "\t\tpublic onPayload?: (payload: unknown, model: Model) => any;" &&
+						l !== "\t\tpublic onResponse?: (response: ProviderResponse, model: Model) => any;" &&
+						l !== "\t\t\tonPayload: this.onPayload," &&
+						l !== "\t\t\tonResponse: this.onResponse,",
+				);
+				const out = filtered.join("\n");
+				if (out !== src) src = out;
 			}
 			if (p.endsWith(join("agent", "src", "types.ts"))) {
 				// scriptc resolves `never` to `any`, which would collapse AgentMessage
@@ -159,13 +182,13 @@ function walk(dir) {
 				metaUrlRewrites++;
 			}
 			src = src.replace(SPEC_RE, (m, kw, q, spec) => {
-				if (isPiAiSpec(spec)) {
+				if (isPiAiSpec(spec) && !isIslanded("@earendil-works/pi-ai")) {
 					let rel = relative(dirname(p), join(OUT, PI_AI_LITE)).split(sep).join("/");
 					if (!rel.startsWith(".")) rel = `./${rel}`;
 					rewrites++;
 					return `${kw}${q}${rel}${q}`;
 				}
-				if (isTypeboxSpec(spec)) {
+				if (isTypeboxSpec(spec) && !isIslanded("@earendil-works/pi-agent-core")) {
 					let rel = relative(dirname(p), join(OUT, TYPEBOX_LITE)).split(sep).join("/");
 					if (!rel.startsWith(".")) rel = `./${rel}`;
 					rewrites++;
@@ -376,8 +399,29 @@ function patchKeybindingRecords(OUT) {
 
 patchKeybindingRecords(OUT);
 
+// scriptc port: the @anthropic-ai/sdk references the global `FormData` in its
+// request-encoding chain (`body instanceof FormData`). The --dynamic island
+// does not define FormData, so every provider request throws. Inject an inert
+// polyfill into the SDK entry (idempotent; no behaviour change under Node).
+	const sdkFiles = ["index.js", "index.mjs", "client.js", "client.mjs", "internal/uploads.js", "internal/uploads.mjs"];
+	const SDK_INDEXS = sdkFiles.map((f) => join(ROOT, "node_modules", "@anthropic-ai", "sdk", f));
+	for (const SDK_INDEX of SDK_INDEXS) {
+try {
+	if (statSync(SDK_INDEX).isFile()) {
+		const sdk = readFileSync(SDK_INDEX, "utf8");
+		const marker = "/* scriptc-port: island FormData polyfill */";
+		if (!sdk.includes(marker)) {
+			writeFileSync(
+				SDK_INDEX,
+				`${marker}\nif (typeof globalThis.FormData === "undefined") { globalThis.FormData = class FormData {}; }\n${sdk}`,
+			);
+		}
+	}
+} catch {}
+
 function patchTelemetry(OUT) {
 	const p = join(OUT, "packages/agent/src/harness/telemetry.ts");
+	if (!existsSync(p)) return; // agent islanded
 	let s = readFileSync(p, "utf8");
 	const before = s;
 	s = s.replace(/ as const satisfies TelemetrySchemaDefinition/g, " as const");

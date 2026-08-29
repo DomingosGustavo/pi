@@ -18,9 +18,9 @@
  *   pi-min -p "prompt"          # one-shot, prints the response
  *   PI_PROVIDER=anthropic PI_MODEL=... pi-min ...
  */
-import { Agent } from "@earendil-works/pi-agent-core/agent";
-import type { AgentEvent, StreamFn } from "@earendil-works/pi-agent-core/types";
-import { createModels } from "@earendil-works/pi-ai";
+import { Agent } from "@earendil-works/pi-agent-core";
+import type { AgentEvent, StreamFn } from "@earendil-works/pi-agent-core";
+import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { minimalTools } from "./tools.ts";
 
 // ── ANSI helpers ────────────────────────────────────────────────────────────
@@ -48,7 +48,7 @@ interface ProviderSelection {
 }
 
 function selectModel(): ProviderSelection {
-	const models = createModels();
+	const models = builtinModels();
 	const providerId = process.env.PI_PROVIDER ?? "anthropic";
 	const modelId = process.env.PI_MODEL;
 	let model: any | undefined;
@@ -71,7 +71,7 @@ function selectModel(): ProviderSelection {
 }
 
 function makeStreamFn() {
-	const models = createModels();
+	const models = builtinModels();
 	// NOTE: params stay unannotated on purpose — this callback crosses into
 	// dynamically-served (island) code, and scriptc only admits it when the
 	// checker keeps the parameters 'any' via contextual typing. The inferred
@@ -79,7 +79,9 @@ function makeStreamFn() {
 	// an opaque dynamic value.
 	const streamFn: StreamFn = async (model, context, options) => {
 		const apiKey = getEnvApiKey(model.provider);
-		return models.streamSimple(model, context, { ...options, apiKey });
+		const signal = options !== undefined ? options.signal : undefined;
+		const maxTokens = process.env.PI_MAX_TOKENS !== undefined ? Number(process.env.PI_MAX_TOKENS) : undefined;
+		return models.streamSimple(model, context, { apiKey, signal, maxTokens });
 	};
 	return streamFn;
 }
@@ -89,7 +91,9 @@ function makeStreamFn() {
  * module stays islanded, so a source file cannot import from it). Covers the
  * common providers; unknown providers fall back to the UPPER_SNAKE convention.
  */
-const ENV_API_KEYS: Record<string, string> = {
+// undefined-valued: a missing key must read as undefined, not trap
+// (scriptc traps keyed reads whose result type has no undefined arm).
+const ENV_API_KEYS: Record<string, string | undefined> = {
 	anthropic: "ANTHROPIC_API_KEY",
 	openai: "OPENAI_API_KEY",
 	"azure-openai-responses": "AZURE_OPENAI_API_KEY",
@@ -254,44 +258,32 @@ const SYSTEM_PROMPT = [
 	"Be concise. Prefer relative paths.",
 ].join(" ");
 
-function renderEvent(event: AgentEvent): void {
-	switch (event.type) {
-		case "message_update": {
-			const ev = event.assistantMessageEvent;
-			if (ev.type === "text_delta") {
-				out(ev.delta);
-			} else if (ev.type === "thinking_delta") {
-				out(`${DIM}${ev.delta}${RESET}`);
-			}
-			break;
+function renderEvent(event: any): void {
+	const type = event.type as string;
+	if (type === "message_update") {
+		const ev = event.assistantMessageEvent;
+		if (ev.type === "text_delta") {
+			out(ev.delta);
+		} else if (ev.type === "thinking_delta") {
+			out(`${DIM}${ev.delta}${RESET}`);
 		}
-		case "message_end": {
-			if (event.message.role === "assistant") {
-				outLine("");
-			}
-			break;
-		}
-		case "tool_execution_start":
-			outLine(`${YELLOW}· ${event.toolName} ${JSON.stringify(event.args).slice(0, 120)}${RESET}`);
-			break;
-		case "tool_execution_end": {
-			if (event.isError) outLine(`${RED}tool error${RESET}`);
-			outLine(`${DIM}${truncate(toolResultText(event.result), 400)}${RESET}`);
-			break;
-		}
-		case "turn_end":
+	} else if (type === "message_end") {
+		if (event.message.role === "assistant") {
 			outLine("");
-			break;
-		case "agent_end": {
-			const msg = event.messages[event.messages.length - 1];
-			if (msg && msg.role === "assistant") {
-				const m = msg as { errorMessage?: string };
-				if (m.errorMessage) outLine(`${RED}error: ${m.errorMessage}${RESET}`);
-			}
-			break;
 		}
-		default:
-			break;
+	} else if (type === "tool_execution_start") {
+		outLine(`${YELLOW}\u00b7 ${event.toolName} ${JSON.stringify(event.args).slice(0, 120)}${RESET}`);
+	} else if (type === "tool_execution_end") {
+		if (event.isError) outLine(`${RED}tool error${RESET}`);
+		outLine(`${DIM}${truncate(toolResultText(event.result), 400)}${RESET}`);
+	} else if (type === "turn_end") {
+		outLine("");
+	} else if (type === "agent_end") {
+		const msg = event.messages[event.messages.length - 1];
+		if (msg !== undefined && msg.role === "assistant") {
+			const m = msg as { errorMessage?: string };
+			if (m.errorMessage !== undefined) outLine(`${RED}error: ${m.errorMessage}${RESET}`);
+		}
 	}
 }
 
@@ -334,34 +326,17 @@ async function main(): Promise<number> {
 	const selection = selectModel();
 	outLine(`${BOLD}pi-min${RESET} ${DIM}— ${selection.providerId}/${selection.model.id}${RESET}`);
 
-	// scriptc-port note: every option is passed explicitly (undefined where
-	// unused) — the compiler resolves constructor parameters against the
-	// call-site literal shape, and omitted members read back as `any`.
+	// Island boundary: AgentOptions/callbacks are dynamic values; only
+	// primitives, JSON-safe records, and any-typed callbacks cross.
 	agent = new Agent({
 		streamFn: makeStreamFn(),
-		convertToLlm: undefined,
-		transformContext: undefined,
-		getApiKey: undefined,
-		onPayload: undefined,
-		onResponse: undefined,
-		beforeToolCall: undefined,
-		afterToolCall: undefined,
-		shouldStopAfterTurn: undefined,
-		prepareNextTurn: undefined,
-		prepareNextTurnWithContext: undefined,
-		steeringMode: undefined,
-		followUpMode: undefined,
-		sessionId: undefined,
-		thinkingBudgets: undefined,
-		transport: undefined,
-		maxRetryDelayMs: undefined,
-		toolExecution: undefined,
 		initialState: {
 			systemPrompt: SYSTEM_PROMPT,
+			model: selection.model,
 			tools: minimalTools,
 		},
 	});
-	agent.subscribe((event: AgentEvent) => {
+	agent.subscribe((event) => {
 		renderEvent(event);
 	});
 

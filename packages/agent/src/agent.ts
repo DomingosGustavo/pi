@@ -287,8 +287,9 @@ export class Agent {
 	// (agent-loop.ts) awaits the result, so behaviour is unchanged; sync
 	// callbacks are wrapped into async ones here.
 	public getApiKey?: (provider: string) => Promise<string | undefined>;
-	public onPayload?: SimpleStreamOptions["onPayload"];
-	public onResponse?: SimpleStreamOptions["onResponse"];
+	// scriptc-port note: spelled out (indexed-access types resolve loosely).
+	public onPayload?: (payload: unknown, model: Model<any>) => any;
+	public onResponse?: (response: ProviderResponse, model: Model<any>) => any;
 	public beforeToolCall?: (
 		context: BeforeToolCallContext,
 		signal?: AbortSignal,
@@ -325,16 +326,65 @@ export class Agent {
 			if (options.convertToLlm !== undefined) return options.convertToLlm(messages);
 			return defaultConvertToLlm(messages);
 		};
-		this.transformContext = options.transformContext;
-		this.streamFunction = options.streamFn !== undefined ? options.streamFn : getDefaultStreamFn();
-		this.getApiKey = options.getApiKey;
-		this.onPayload = options.onPayload;
-		this.onResponse = options.onResponse;
-		this.beforeToolCall = options.beforeToolCall;
-		this.afterToolCall = options.afterToolCall;
-		this.shouldStopAfterTurn = options.shouldStopAfterTurn;
-		this.prepareNextTurn = options.prepareNextTurn;
-		this.prepareNextTurnWithContext = options.prepareNextTurnWithContext;
+		// scriptc-port note: every callback field is installed through a fresh
+		// async closure (direct copies of option callbacks lower as `any`).
+		const configuredTransformContext = options.transformContext;
+		this.transformContext =
+			configuredTransformContext === undefined
+				? undefined
+				: async (messages: AgentMessage[], signal?: AbortSignal): Promise<AgentMessage[]> =>
+						configuredTransformContext(messages, signal);
+		if (options.streamFn !== undefined) {
+			this.streamFunction = options.streamFn;
+		} else {
+			this.streamFunction = getDefaultStreamFn();
+		}
+		const configuredGetApiKey = options.getApiKey;
+		this.getApiKey =
+			configuredGetApiKey === undefined ? undefined : async (provider: string) => configuredGetApiKey(provider);
+		const configuredOnPayload = options.onPayload;
+		this.onPayload =
+			configuredOnPayload === undefined
+				? undefined
+				: async (payload: unknown, model: Model<any>): Promise<unknown | undefined> =>
+						configuredOnPayload(payload, model);
+		const configuredOnResponse = options.onResponse;
+		this.onResponse =
+			configuredOnResponse === undefined
+				? undefined
+				: async (response: ProviderResponse, model: Model<any>): Promise<void> => {
+						await configuredOnResponse(response, model);
+					};
+		const configuredBeforeToolCall = options.beforeToolCall;
+		this.beforeToolCall =
+			configuredBeforeToolCall === undefined
+				? undefined
+				: async (context: BeforeToolCallContext, signal?: AbortSignal): Promise<BeforeToolCallResult | undefined> =>
+						configuredBeforeToolCall(context, signal);
+		const configuredAfterToolCall = options.afterToolCall;
+		this.afterToolCall =
+			configuredAfterToolCall === undefined
+				? undefined
+				: async (context: AfterToolCallContext, signal?: AbortSignal): Promise<AfterToolCallResult | undefined> =>
+						configuredAfterToolCall(context, signal);
+		const configuredShouldStopAfterTurn = options.shouldStopAfterTurn;
+		this.shouldStopAfterTurn =
+			configuredShouldStopAfterTurn === undefined
+				? undefined
+				: async (context: ShouldStopAfterTurnContext, signal?: AbortSignal): Promise<boolean> =>
+						configuredShouldStopAfterTurn(context, signal);
+		const configuredPrepareNextTurn = options.prepareNextTurn;
+		this.prepareNextTurn =
+			configuredPrepareNextTurn === undefined
+				? undefined
+				: async (signal?: AbortSignal): Promise<AgentLoopTurnUpdate | undefined> =>
+						configuredPrepareNextTurn(signal);
+		const configuredPrepareNextTurnWithContext = options.prepareNextTurnWithContext;
+		this.prepareNextTurnWithContext =
+			configuredPrepareNextTurnWithContext === undefined
+				? undefined
+				: async (context: PrepareNextTurnContext, signal?: AbortSignal): Promise<AgentLoopTurnUpdate | undefined> =>
+						configuredPrepareNextTurnWithContext(context, signal);
 		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
 		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
 		this.sessionId = options.sessionId;
@@ -594,8 +644,9 @@ export class Agent {
 			prepareNextTurn:
 				this.prepareNextTurnWithContext !== undefined || this.prepareNextTurn !== undefined
 					? async (context: PrepareNextTurnContext): Promise<AgentLoopTurnUpdate | undefined> => {
-							if (this.prepareNextTurnWithContext !== undefined) {
-								return this.prepareNextTurnWithContext(context, this.signal);
+							const withContext = this.prepareNextTurnWithContext;
+							if (withContext !== undefined) {
+								return withContext(context, this.signal);
 							}
 							const next = this.prepareNextTurn;
 							return next !== undefined ? next(this.signal) : undefined;
