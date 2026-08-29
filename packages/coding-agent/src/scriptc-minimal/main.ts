@@ -22,6 +22,8 @@ import { Agent } from "@earendil-works/pi-agent-core";
 import type { AgentEvent, StreamFn } from "@earendil-works/pi-agent-core";
 import { builtinModels } from "@earendil-works/pi-ai/providers/all";
 import { minimalTools } from "./tools.ts";
+import { loadProjectContextFiles } from "./context.ts";
+import { buildSystemPrompt } from "./system-prompt.ts";
 
 // ── ANSI helpers ────────────────────────────────────────────────────────────
 
@@ -251,24 +253,39 @@ class Tui {
 
 // ── agent wiring ────────────────────────────────────────────────────────────
 
-const SYSTEM_PROMPT = [
-	"You are pi, a coding agent running as a compiled native binary.",
-	"You have tools: read, write, edit, bash, ls, grep.",
-	"Use read/grep/ls to explore, edit/write to change files, bash for commands.",
-	"Be concise. Prefer relative paths.",
-].join(" ");
+// scriptc-port: dynamic system prompt — AGENTS.md/CLAUDE.md chain (cwd → root,
+// plus ~/.pi/agent) is loaded and appended as <project_instructions>, matching
+// pi's loadProjectContextFiles + buildSystemPrompt shape.
+const CWD = process.cwd();
+const contextFiles = loadProjectContextFiles(CWD);
+const SYSTEM_PROMPT = buildSystemPrompt({ cwd: CWD, contextFiles });
 
 function renderEvent(event: any): void {
 	const type = event.type as string;
 	if (type === "message_update") {
 		const ev = event.assistantMessageEvent;
 		if (ev.type === "text_delta") {
+			streamedText = true;
 			out(ev.delta);
 		} else if (ev.type === "thinking_delta") {
 			out(`${DIM}${ev.delta}${RESET}`);
 		}
 	} else if (type === "message_end") {
 		if (event.message.role === "assistant") {
+			// fallback: providers that emit no text deltas would otherwise
+			// leave the final answer invisible
+			if (!streamedText) {
+				const blocks = event.message.content;
+				if (typeof blocks === "object" && blocks !== null && typeof blocks.length === "number") {
+					let text = "";
+					for (let i = 0; i < blocks.length; i++) {
+						const block = blocks[i];
+						if (block.type === "text") text += block.text;
+					}
+					if (text.length > 0) outLine(text);
+				}
+			}
+			streamedText = false;
 			outLine("");
 		}
 	} else if (type === "tool_execution_start") {
@@ -308,6 +325,7 @@ function truncate(s: string, max: number): string {
 }
 
 let agent: Agent | null = null;
+let streamedText = false;
 
 async function runAgentTurn(userText: string): Promise<void> {
 	if (!agent) return;
@@ -325,6 +343,11 @@ async function main(): Promise<number> {
 
 	const selection = selectModel();
 	outLine(`${BOLD}pi-min${RESET} ${DIM}— ${selection.providerId}/${selection.model.id}${RESET}`);
+	if (contextFiles.length > 0) {
+		for (let i = 0; i < contextFiles.length; i++) {
+			outLine(`${DIM}context: ${contextFiles[i].path}${RESET}`);
+		}
+	}
 
 	// Island boundary: AgentOptions/callbacks are dynamic values; only
 	// primitives, JSON-safe records, and any-typed callbacks cross.
