@@ -692,27 +692,22 @@ async function executePreparedToolCall(
 	let acceptingUpdates = true;
 
 	try {
-		const result = await prepared.tool.execute(
-			prepared.toolCall.id,
-			prepared.args,
-			signal,
-			(partialResult) => {
-				if (!acceptingUpdates) return;
-				// async wrapper: emit may return void or a promise, and scriptc
-				// has no Promise.resolve-over-maybe-promise lowering.
-				updateEvents.push(
-					(async () => {
-						await emit({
-							type: "tool_execution_update",
-							toolCallId: prepared.toolCall.id,
-							toolName: prepared.toolCall.name,
-							args: prepared.toolCall.arguments,
-							partialResult,
-						});
-					})(),
-				);
-			},
-		);
+		const result = await prepared.tool.execute(prepared.toolCall.id, prepared.args, signal, (partialResult) => {
+			if (!acceptingUpdates) return;
+			// async wrapper: emit may return void or a promise, and scriptc
+			// has no Promise.resolve-over-maybe-promise lowering.
+			updateEvents.push(
+				(async () => {
+					await emit({
+						type: "tool_execution_update",
+						toolCallId: prepared.toolCall.id,
+						toolName: prepared.toolCall.name,
+						args: prepared.toolCall.arguments,
+						partialResult,
+					});
+				})(),
+			);
+		});
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
 		return { result, isError: false };

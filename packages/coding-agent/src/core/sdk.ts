@@ -1,5 +1,11 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, setDefaultStreamFn, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import {
+	Agent,
+	type AgentMessage,
+	type StreamFn,
+	setDefaultStreamFn,
+	type ThinkingLevel,
+} from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -41,8 +47,7 @@ let defaultStreamFnInstalled = false;
 // scriptc-port note: StreamFn is Promise-returning now, so adapt the
 // Models.streamSimple shape with an async wrapper. Exported so identity
 // checks against the installed default keep working.
-export const streamSimpleAdapter: StreamFn = async (model, context, options) =>
-	streamSimple(model, context, options);
+export const streamSimpleAdapter: StreamFn = async (model, context, options) => streamSimple(model, context, options);
 
 export function ensureDefaultStreamFn(): void {
 	if (defaultStreamFnInstalled) return;

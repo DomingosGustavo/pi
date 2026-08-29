@@ -36,18 +36,24 @@ export interface LiteModels {
 	getProvider(id: string): LiteProvider | undefined;
 	getProviders(): readonly LiteProvider[];
 	getModel(provider: string, id: string): Model<any> | undefined;
-	streamSimple(
-		model: Model<any>,
-		context: Context,
-		options?: SimpleStreamOptions,
-	): AssistantMessageEventStream;
+	streamSimple(model: Model<any>, context: Context, options?: SimpleStreamOptions): AssistantMessageEventStream;
 }
 
 function zeroUsage(): Usage {
-	return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, totalTokens: 0, cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 } };
+	return {
+		input: 0,
+		output: 0,
+		cacheRead: 0,
+		cacheWrite: 0,
+		totalTokens: 0,
+		cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+	};
 }
 
-function modelCost(cost: { input: number; output: number; cacheRead: number; cacheWrite: number }, usage: Usage): Usage["cost"] {
+function modelCost(
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number },
+	usage: Usage,
+): Usage["cost"] {
 	const input = (usage.input / 1_000_000) * cost.input;
 	const output = (usage.output / 1_000_000) * cost.output;
 	const cacheRead = (usage.cacheRead / 1_000_000) * cost.cacheRead;
@@ -55,7 +61,16 @@ function modelCost(cost: { input: number; output: number; cacheRead: number; cac
 	return { input, output, cacheRead, cacheWrite, total: input + output + cacheRead + cacheWrite };
 }
 
-function catalogModel(provider: string, api: string, baseUrl: string, id: string, name: string, contextWindow: number, maxTokens: number, cost: { input: number; output: number; cacheRead: number; cacheWrite: number }): Model<any> {
+function catalogModel(
+	provider: string,
+	api: string,
+	baseUrl: string,
+	id: string,
+	name: string,
+	contextWindow: number,
+	maxTokens: number,
+	cost: { input: number; output: number; cacheRead: number; cacheWrite: number },
+): Model<any> {
 	return { id, name, api, provider, baseUrl, reasoning: false, input: ["text"], cost, contextWindow, maxTokens };
 }
 
@@ -63,15 +78,57 @@ const ANTHROPIC_BASE = "https://api.anthropic.com";
 const OPENAI_BASE = "https://api.openai.com/v1";
 
 const ANTHROPIC_MODELS: Model<any>[] = [
-	catalogModel("anthropic", "anthropic-messages", ANTHROPIC_BASE, "claude-sonnet-4-5", "Claude Sonnet 4.5", 200_000, 64_000, { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 }),
-	catalogModel("anthropic", "anthropic-messages", ANTHROPIC_BASE, "claude-opus-4-5", "Claude Opus 4.5", 200_000, 64_000, { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 }),
-	catalogModel("anthropic", "anthropic-messages", ANTHROPIC_BASE, "claude-haiku-4-5", "Claude Haiku 4.5", 200_000, 64_000, { input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 }),
+	catalogModel(
+		"anthropic",
+		"anthropic-messages",
+		ANTHROPIC_BASE,
+		"claude-sonnet-4-5",
+		"Claude Sonnet 4.5",
+		200_000,
+		64_000,
+		{ input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+	),
+	catalogModel(
+		"anthropic",
+		"anthropic-messages",
+		ANTHROPIC_BASE,
+		"claude-opus-4-5",
+		"Claude Opus 4.5",
+		200_000,
+		64_000,
+		{ input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 },
+	),
+	catalogModel(
+		"anthropic",
+		"anthropic-messages",
+		ANTHROPIC_BASE,
+		"claude-haiku-4-5",
+		"Claude Haiku 4.5",
+		200_000,
+		64_000,
+		{ input: 1, output: 5, cacheRead: 0.1, cacheWrite: 1.25 },
+	),
 ];
 
 const OPENAI_MODELS: Model<any>[] = [
-	catalogModel("openai", "openai-completions", OPENAI_BASE, "gpt-5.2", "GPT-5.2", 400_000, 128_000, { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 }),
-	catalogModel("openai", "openai-completions", OPENAI_BASE, "gpt-5.2-codex", "GPT-5.2 Codex", 400_000, 128_000, { input: 1.25, output: 10, cacheRead: 0.125, cacheWrite: 0 }),
-	catalogModel("openai", "openai-completions", OPENAI_BASE, "gpt-5-mini", "GPT-5 Mini", 400_000, 128_000, { input: 0.25, output: 2, cacheRead: 0.025, cacheWrite: 0 }),
+	catalogModel("openai", "openai-completions", OPENAI_BASE, "gpt-5.2", "GPT-5.2", 400_000, 128_000, {
+		input: 1.25,
+		output: 10,
+		cacheRead: 0.125,
+		cacheWrite: 0,
+	}),
+	catalogModel("openai", "openai-completions", OPENAI_BASE, "gpt-5.2-codex", "GPT-5.2 Codex", 400_000, 128_000, {
+		input: 1.25,
+		output: 10,
+		cacheRead: 0.125,
+		cacheWrite: 0,
+	}),
+	catalogModel("openai", "openai-completions", OPENAI_BASE, "gpt-5-mini", "GPT-5 Mini", 400_000, 128_000, {
+		input: 0.25,
+		output: 2,
+		cacheRead: 0.025,
+		cacheWrite: 0,
+	}),
 ];
 
 function makeProvider(id: string, name: string, models: Model<any>[]): LiteProvider {
@@ -162,7 +219,11 @@ function toOpenAiMessages(systemPrompt: string, messages: Message[]): Array<Reco
 			for (const block of message.content) {
 				if (block.type === "text") text += (text ? "\n" : "") + block.text;
 				if (block.type === "toolCall") {
-					toolCalls.push({ id: block.id, type: "function", function: { name: block.name, arguments: JSON.stringify(block.arguments) } });
+					toolCalls.push({
+						id: block.id,
+						type: "function",
+						function: { name: block.name, arguments: JSON.stringify(block.arguments) },
+					});
 				}
 			}
 			const entry: Record<string, unknown> = { role: "assistant", content: text || null };
@@ -308,7 +369,12 @@ function errorAssistantMessage(model: Model<any>, message: string): AssistantMes
 	};
 }
 
-async function runRequest(model: Model<any>, context: Context, options: SimpleStreamOptions, stream: AssistantMessageEventStream): Promise<void> {
+async function runRequest(
+	model: Model<any>,
+	context: Context,
+	options: SimpleStreamOptions,
+	stream: AssistantMessageEventStream,
+): Promise<void> {
 	const empty: AssistantMessage = {
 		role: "assistant",
 		content: [],
@@ -369,12 +435,17 @@ async function runRequest(model: Model<any>, context: Context, options: SimpleSt
 
 	if (!response.ok) {
 		const detail = typeof body?.error?.message === "string" ? body.error.message : JSON.stringify(body).slice(0, 400);
-		stream.push({ type: "error", reason: "error", error: errorAssistantMessage(model, `HTTP ${response.status}: ${detail}`) });
+		stream.push({
+			type: "error",
+			reason: "error",
+			error: errorAssistantMessage(model, `HTTP ${response.status}: ${detail}`),
+		});
 		stream.end();
 		return;
 	}
 
-	const finalMessage = model.api === "anthropic-messages" ? parseAnthropicResponse(model, body) : parseOpenAiResponse(model, body);
+	const finalMessage =
+		model.api === "anthropic-messages" ? parseAnthropicResponse(model, body) : parseOpenAiResponse(model, body);
 	for (const block of finalMessage.content) {
 		if (block.type === "text") {
 			stream.push({ type: "text_delta", contentIndex: 0, delta: block.text, partial: finalMessage });
@@ -382,6 +453,10 @@ async function runRequest(model: Model<any>, context: Context, options: SimpleSt
 			stream.push({ type: "toolcall_end", contentIndex: 0, toolCall: block, partial: finalMessage });
 		}
 	}
-	stream.push({ type: "done", reason: finalMessage.stopReason === "toolUse" ? "toolUse" : "stop", message: finalMessage });
+	stream.push({
+		type: "done",
+		reason: finalMessage.stopReason === "toolUse" ? "toolUse" : "stop",
+		message: finalMessage,
+	});
 	stream.end(finalMessage);
 }

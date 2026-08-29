@@ -231,7 +231,7 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 *
 	 * Contract: must not throw or reject. Throwing interrupts the low-level agent loop without producing a normal event sequence.
 	 */
-		// scriptc-port note: always-promise (consumers await it).
+	// scriptc-port note: always-promise (consumers await it).
 	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => Promise<boolean>;
 
 	/**

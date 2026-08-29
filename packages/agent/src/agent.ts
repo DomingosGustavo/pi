@@ -1,9 +1,9 @@
 import type {
 	Context,
 	ImageContent,
-	ProviderResponse,
 	Message,
 	Model,
+	ProviderResponse,
 	SimpleStreamOptions,
 	TextContent,
 	ThinkingBudgets,
@@ -101,7 +101,6 @@ export interface AgentStateInit {
 	messages?: AgentMessage[];
 }
 
-
 /**
  * Read/write view over the mutable state exposed through {@link Agent.state}.
  *
@@ -170,9 +169,11 @@ function createMutableAgentState(initialState: AgentStateInit | undefined): Muta
 		messages = initialState.messages.slice();
 	}
 	return {
-		systemPrompt: initialState === undefined ? "" : initialState.systemPrompt === undefined ? "" : initialState.systemPrompt,
+		systemPrompt:
+			initialState === undefined ? "" : initialState.systemPrompt === undefined ? "" : initialState.systemPrompt,
 		model: initialState === undefined || initialState.model === undefined ? DEFAULT_MODEL : initialState.model,
-		thinkingLevel: initialState === undefined || initialState.thinkingLevel === undefined ? "off" : initialState.thinkingLevel,
+		thinkingLevel:
+			initialState === undefined || initialState.thinkingLevel === undefined ? "off" : initialState.thinkingLevel,
 		tools,
 		messages,
 		isStreaming: false,
@@ -296,13 +297,8 @@ export class Agent {
 		context: AfterToolCallContext,
 		signal?: AbortSignal,
 	) => Promise<AfterToolCallResult | undefined>;
-	public shouldStopAfterTurn?: (
-		context: ShouldStopAfterTurnContext,
-		signal?: AbortSignal,
-	) => Promise<boolean>;
-	public prepareNextTurn?: (
-		signal?: AbortSignal,
-	) => Promise<AgentLoopTurnUpdate | undefined>;
+	public shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext, signal?: AbortSignal) => Promise<boolean>;
+	public prepareNextTurn?: (signal?: AbortSignal) => Promise<AgentLoopTurnUpdate | undefined>;
 	public prepareNextTurnWithContext?: (
 		context: PrepareNextTurnContext,
 		signal?: AbortSignal,
@@ -593,8 +589,7 @@ export class Agent {
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			shouldStopAfterTurn: shouldStopAfterTurn
-				? async (context: ShouldStopAfterTurnContext): Promise<boolean> =>
-						shouldStopAfterTurn(context, this.signal)
+				? async (context: ShouldStopAfterTurnContext): Promise<boolean> => shouldStopAfterTurn(context, this.signal)
 				: undefined,
 			prepareNextTurn:
 				this.prepareNextTurnWithContext !== undefined || this.prepareNextTurn !== undefined

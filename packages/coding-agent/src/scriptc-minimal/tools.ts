@@ -16,12 +16,12 @@
  * - fs work uses readFileSync/statSync/readdirSync + fs/promises readFile/
  *   writeFile, all of which lower.
  */
-import { readdirSync, readFileSync, statSync, type Stats } from "node:fs";
-import { readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
+
 import { spawnSync } from "node:child_process";
+import { readdirSync, readFileSync, type Stats, statSync } from "node:fs";
+import { readFile as fsReadFile, writeFile as fsWriteFile } from "node:fs/promises";
 import { isAbsolute, join as joinPath, resolve as resolvePath } from "node:path";
 import type { AgentTool, AgentToolResult } from "@earendil-works/pi-agent-core/types";
-
 
 /*
  * Boundary notes (scriptc): the tool objects cross into the agent loop, whose

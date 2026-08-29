@@ -7,11 +7,7 @@
  */
 import type { TSchema } from "./typebox.ts";
 
-export type KnownApi =
-	| "anthropic-messages"
-	| "openai-completions"
-	| "openai-responses"
-	| "google-generative-ai";
+export type KnownApi = "anthropic-messages" | "openai-completions" | "openai-responses" | "google-generative-ai";
 export type Api = string;
 export type ProviderId = string;
 export type ToolChoice = "auto" | "none";
