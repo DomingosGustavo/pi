@@ -1,5 +1,5 @@
 import { join } from "node:path";
-import { Agent, type AgentMessage, setDefaultStreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
+import { Agent, type AgentMessage, setDefaultStreamFn, type StreamFn, type ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { clampThinkingLevel, type Message, type Model, streamSimple } from "@earendil-works/pi-ai/compat";
 import { getAgentDir } from "../config.ts";
 import { resolvePath } from "../utils/paths.ts";
@@ -38,10 +38,16 @@ import {
 // admitted when every body is declaration-only (SC1016). Installing the default
 // lazily keeps the identical behaviour for every entry point below.
 let defaultStreamFnInstalled = false;
+// scriptc-port note: StreamFn is Promise-returning now, so adapt the
+// Models.streamSimple shape with an async wrapper. Exported so identity
+// checks against the installed default keep working.
+export const streamSimpleAdapter: StreamFn = async (model, context, options) =>
+	streamSimple(model, context, options);
+
 export function ensureDefaultStreamFn(): void {
 	if (defaultStreamFnInstalled) return;
 	defaultStreamFnInstalled = true;
-	setDefaultStreamFn(streamSimple);
+	setDefaultStreamFn(streamSimpleAdapter);
 }
 
 export interface CreateAgentSessionOptions {
@@ -311,7 +317,8 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			thinkingLevel,
 			tools: [],
 		},
-		convertToLlm: convertToLlmWithBlockImages,
+		// scriptc-port note: always-promise convertToLlm.
+		convertToLlm: async (messages) => convertToLlmWithBlockImages(messages),
 		streamFn: async (model, context, options) => {
 			const providerRetrySettings = settingsManager.getProviderRetrySettings();
 			const httpIdleTimeoutMs = settingsManager.getHttpIdleTimeoutMs();

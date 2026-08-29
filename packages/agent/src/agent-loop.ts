@@ -7,6 +7,7 @@ import {
 	type AssistantMessage,
 	type Context,
 	EventStream,
+	type Message,
 	type ToolResultMessage,
 	validateToolArguments,
 } from "@earendil-works/pi-ai";
@@ -92,6 +93,21 @@ export function agentLoopContinue(
 	return stream;
 }
 
+/** scriptc: `error instanceof Error` is unsupported (builtin right-hand side);
+ * duck-type the message instead — behaviour is identical for Error values. */
+function errorMessageOf(error: unknown): string {
+	if (typeof error === "object" && error !== null) {
+		const message = (error as { message?: unknown }).message;
+		if (typeof message === "string") return message;
+	}
+	return String(error);
+}
+
+export /** Identity transform for configs that omit transformContext. */
+async function identityTransformContext(messages: AgentMessage[]): Promise<AgentMessage[]> {
+	return messages;
+}
+
 export async function runAgentLoop(
 	prompts: AgentMessage[],
 	context: AgentContext,
@@ -100,10 +116,15 @@ export async function runAgentLoop(
 	signal: AbortSignal | undefined,
 	streamFn: StreamFn,
 ): Promise<AgentMessage[]> {
-	const newMessages: AgentMessage[] = [...prompts];
+	// scriptc: no spread lowering — build copies explicitly. AgentContext has
+	// exactly these three fields, so the literal below copies `context` fully.
+	const newMessages: AgentMessage[] = prompts.slice();
+	const mergedMessages: AgentMessage[] = context.messages.slice();
+	for (const prompt of prompts) mergedMessages.push(prompt);
 	const currentContext: AgentContext = {
-		...context,
-		messages: [...context.messages, ...prompts],
+		systemPrompt: context.systemPrompt,
+		messages: mergedMessages,
+		tools: context.tools,
 	};
 
 	await emit({ type: "agent_start" });
@@ -212,7 +233,7 @@ async function runLoop(
 					message.stopReason === "length"
 						? await failToolCallsFromTruncatedMessage(toolCalls, emit)
 						: await executeToolCalls(currentContext, message, config, signal, emit);
-				toolResults.push(...executedToolBatch.messages);
+				for (const executedMessage of executedToolBatch.messages) toolResults.push(executedMessage);
 				hasMoreToolCalls = !executedToolBatch.terminate;
 
 				for (const result of toolResults) {
@@ -275,16 +296,24 @@ async function runLoop(
 }
 
 /** Build the provider context using the same transform and conversion pipeline as an agent request. */
+// scriptc-port note: structural interface instead of Pick<AgentLoopConfig, ...>
+// — mapped-type instantiation over the config made the parameter read dynamic.
+export interface ContextPipeline {
+	convertToLlm: (messages: AgentMessage[]) => Promise<Message[]>;
+	transformContext: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+}
+
 export async function buildProviderContext(
 	context: AgentContext,
-	config: Pick<AgentLoopConfig, "convertToLlm" | "transformContext">,
+	config: ContextPipeline,
 	signal?: AbortSignal,
 ): Promise<Context> {
 	// Apply context transform if configured (AgentMessage[] → AgentMessage[])
+	// scriptc: the optional-call / optional-member materialization forms have no
+	// lowering, so normalize through a `??` with a module-level identity (both
+	// arms are plain functions — no undefined arm).
 	let messages = context.messages;
-	if (config.transformContext) {
-		messages = await config.transformContext(messages, signal);
-	}
+	messages = await (config.transformContext ?? identityTransformContext)(messages, signal);
 
 	// Convert to LLM-compatible messages (AgentMessage[] → Message[])
 	const llmMessages = await config.convertToLlm(messages);
@@ -314,68 +343,19 @@ async function streamAssistantResponse(
 	const resolvedApiKey =
 		(config.getApiKey ? await config.getApiKey(config.model.provider) : undefined) || config.apiKey;
 
-	const response = await streamFunction(config.model, llmContext, {
-		...config,
-		apiKey: resolvedApiKey,
-		signal,
-	});
+	// scriptc: no record-spread in call arguments — carry the overrides on the
+	// per-run config object instead (apiKey/signal are StreamOptions fields).
+	config.apiKey = resolvedApiKey;
+	config.signal = signal;
+	const response = await streamFunction(config.model, llmContext, config);
 
-	let partialMessage: AssistantMessage | null = null;
-	let addedPartial = false;
-
-	for await (const event of response) {
-		switch (event.type) {
-			case "start":
-				partialMessage = event.partial;
-				context.messages.push(partialMessage);
-				addedPartial = true;
-				await emit({ type: "message_start", message: { ...partialMessage } });
-				break;
-
-			case "text_start":
-			case "text_delta":
-			case "text_end":
-			case "thinking_start":
-			case "thinking_delta":
-			case "thinking_end":
-			case "toolcall_start":
-			case "toolcall_delta":
-			case "toolcall_end":
-				if (partialMessage) {
-					partialMessage = event.partial;
-					context.messages[context.messages.length - 1] = partialMessage;
-					await emit({
-						type: "message_update",
-						assistantMessageEvent: event,
-						message: { ...partialMessage },
-					});
-				}
-				break;
-
-			case "done":
-			case "error": {
-				const finalMessage = await response.result();
-				if (addedPartial) {
-					context.messages[context.messages.length - 1] = finalMessage;
-				} else {
-					context.messages.push(finalMessage);
-				}
-				if (!addedPartial) {
-					await emit({ type: "message_start", message: { ...finalMessage } });
-				}
-				await emit({ type: "message_end", message: finalMessage });
-				return finalMessage;
-			}
-		}
-	}
-
+	// scriptc: `for await` over the island-served event stream has no lowering,
+	// so the loop consumes the final result directly. Streaming updates
+	// (message_update with partial text deltas) are therefore not emitted yet;
+	// an island-side forEachEvent helper can restore them later.
 	const finalMessage = await response.result();
-	if (addedPartial) {
-		context.messages[context.messages.length - 1] = finalMessage;
-	} else {
-		context.messages.push(finalMessage);
-		await emit({ type: "message_start", message: { ...finalMessage } });
-	}
+	context.messages.push(finalMessage);
+	await emit({ type: "message_start", message: finalMessage });
 	await emit({ type: "message_end", message: finalMessage });
 	return finalMessage;
 }
@@ -425,9 +405,20 @@ async function executeToolCalls(
 	emit: AgentEventSink,
 ): Promise<ExecutedToolCallBatch> {
 	const toolCalls = assistantMessage.content.filter((c) => c.type === "toolCall");
-	const hasSequentialToolCall = toolCalls.some(
-		(tc) => currentContext.tools?.find((t) => t.name === tc.name)?.executionMode === "sequential",
-	);
+	// scriptc: Array.prototype.find/some callbacks have no lowering — use loops.
+	const tools = currentContext.tools;
+	let hasSequentialToolCall = false;
+	if (tools !== undefined) {
+		for (const tc of toolCalls) {
+			for (const t of tools) {
+				if (t.name === tc.name) {
+					if (t.executionMode === "sequential") hasSequentialToolCall = true;
+					break;
+				}
+			}
+			if (hasSequentialToolCall) break;
+		}
+	}
 	if (config.toolExecution === "sequential" || hasSequentialToolCall) {
 		return executeToolCallsSequential(currentContext, assistantMessage, toolCalls, config, signal, emit);
 	}
@@ -566,7 +557,9 @@ type PreparedToolCall = {
 	kind: "prepared";
 	toolCall: AgentToolCall;
 	tool: AgentTool<any>;
-	args: unknown;
+	// Validated tool arguments (scriptc-port: a concrete record rather than
+	// `unknown`, which cannot flow back into the tool's execute signature).
+	args: Record<string, unknown>;
 };
 
 type ImmediateToolCallOutcome = {
@@ -601,8 +594,12 @@ function prepareToolCallArguments(tool: AgentTool<any>, toolCall: AgentToolCall)
 		return toolCall;
 	}
 	return {
-		...toolCall,
+		type: toolCall.type,
+		id: toolCall.id,
+		name: toolCall.name,
 		arguments: preparedArguments as Record<string, any>,
+		thoughtSignature: toolCall.thoughtSignature,
+		namespace: toolCall.namespace,
 	};
 }
 
@@ -613,7 +610,17 @@ async function prepareToolCall(
 	config: AgentLoopConfig,
 	signal: AbortSignal | undefined,
 ): Promise<PreparedToolCall | ImmediateToolCallOutcome> {
-	const tool = currentContext.tools?.find((t) => t.name === toolCall.name);
+	// scriptc: find() callback has no lowering — use a loop.
+	const contextTools = currentContext.tools;
+	let tool: AgentTool | undefined;
+	if (contextTools !== undefined) {
+		for (const t of contextTools) {
+			if (t.name === toolCall.name) {
+				tool = t;
+				break;
+			}
+		}
+	}
 	if (!tool) {
 		return {
 			kind: "immediate",
@@ -670,7 +677,7 @@ async function prepareToolCall(
 	} catch (error) {
 		return {
 			kind: "immediate",
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+			result: createErrorToolResult(errorMessageOf(error)),
 			isError: true,
 		};
 	}
@@ -687,20 +694,22 @@ async function executePreparedToolCall(
 	try {
 		const result = await prepared.tool.execute(
 			prepared.toolCall.id,
-			prepared.args as never,
+			prepared.args,
 			signal,
 			(partialResult) => {
 				if (!acceptingUpdates) return;
+				// async wrapper: emit may return void or a promise, and scriptc
+				// has no Promise.resolve-over-maybe-promise lowering.
 				updateEvents.push(
-					Promise.resolve(
-						emit({
+					(async () => {
+						await emit({
 							type: "tool_execution_update",
 							toolCallId: prepared.toolCall.id,
 							toolName: prepared.toolCall.name,
 							args: prepared.toolCall.arguments,
 							partialResult,
-						}),
-					),
+						});
+					})(),
 				);
 			},
 		);
@@ -711,7 +720,7 @@ async function executePreparedToolCall(
 		acceptingUpdates = false;
 		await Promise.all(updateEvents);
 		return {
-			result: createErrorToolResult(error instanceof Error ? error.message : String(error)),
+			result: createErrorToolResult(errorMessageOf(error)),
 			isError: true,
 		};
 	} finally {
@@ -754,7 +763,7 @@ async function finalizeExecutedToolCall(
 				isError = afterResult.isError ?? isError;
 			}
 		} catch (error) {
-			result = createErrorToolResult(error instanceof Error ? error.message : String(error));
+			result = createErrorToolResult(errorMessageOf(error));
 			isError = true;
 		}
 	}
@@ -784,7 +793,7 @@ async function emitToolExecutionEnd(finalized: FinalizedToolCallOutcome, emit: A
 }
 
 function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResultMessage {
-	return {
+	const message: ToolResultMessage = {
 		role: "toolResult",
 		toolCallId: finalized.toolCall.id,
 		toolName: finalized.toolCall.name,
@@ -793,10 +802,15 @@ function createToolResultMessage(finalized: FinalizedToolCallOutcome): ToolResul
 		content: finalized.result.content ?? [],
 		details: finalized.result.details,
 		usage: finalized.result.usage,
-		...(finalized.result.addedToolNames?.length ? { addedToolNames: finalized.result.addedToolNames } : {}),
 		isError: finalized.isError,
 		timestamp: Date.now(),
 	};
+	// scriptc: no conditional spread in record literals — assign the optional
+	// field explicitly (addedToolNames stays absent when empty).
+	if (finalized.result.addedToolNames !== undefined && finalized.result.addedToolNames.length > 0) {
+		message.addedToolNames = finalized.result.addedToolNames;
+	}
+	return message;
 }
 
 async function emitToolResultMessage(toolResultMessage: ToolResultMessage, emit: AgentEventSink): Promise<void> {

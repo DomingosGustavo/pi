@@ -1,6 +1,7 @@
 import type {
 	Context,
 	ImageContent,
+	ProviderResponse,
 	Message,
 	Model,
 	SimpleStreamOptions,
@@ -30,10 +31,21 @@ import type {
 	QueueMode,
 	ShouldStopAfterTurnContext,
 	StreamFn,
+	ThinkingLevel,
 	ToolExecutionMode,
 } from "./types.ts";
 
 export type { QueueMode } from "./types.ts";
+
+/** scriptc: `error instanceof Error` is unsupported (builtin right-hand side);
+ * duck-type the message instead — behaviour is identical for Error values. */
+function errorMessageOf(error: unknown): string {
+	if (typeof error === "object" && error !== null) {
+		const message = (error as { message?: unknown }).message;
+		if (typeof message === "string") return message;
+	}
+	return String(error);
+}
 
 function defaultConvertToLlm(messages: AgentMessage[]): Message[] {
 	return messages.filter(
@@ -50,7 +62,7 @@ const EMPTY_USAGE = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
 };
 
-const DEFAULT_MODEL = {
+const DEFAULT_MODEL: Model<any> = {
 	id: "unknown",
 	name: "unknown",
 	api: "unknown",
@@ -61,63 +73,137 @@ const DEFAULT_MODEL = {
 	cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
 	contextWindow: 0,
 	maxTokens: 0,
-} satisfies Model<any>;
-
-type MutableAgentState = Omit<AgentState, "isStreaming" | "streamingMessage" | "pendingToolCalls" | "errorMessage"> & {
-	isStreaming: boolean;
-	streamingMessage?: AgentMessage;
-	pendingToolCalls: Set<string>;
-	errorMessage?: string;
 };
 
-function createMutableAgentState(
-	initialState?: Partial<Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">>,
-): MutableAgentState {
-	let tools = initialState?.tools?.slice() ?? [];
-	let messages = initialState?.messages?.slice() ?? [];
+/** scriptc-port note: explicit interface — the old
+ * `Omit<AgentState, ...> & {...}` mapped-type form resolved loosely in the
+ * compiled graph (members gained `| undefined` arms and any-ized the state). */
+interface MutableAgentState {
+	systemPrompt: string;
+	model: Model<any>;
+	thinkingLevel: ThinkingLevel;
+	tools: AgentTool[];
+	messages: AgentMessage[];
+	isStreaming: boolean;
+	streamingMessage?: AgentMessage;
+	// Array, not Set: scriptc has no lowering for the Set copy-constructor, and
+	// Sets of strings do not survive the static/island record boundary.
+	pendingToolCalls: string[];
+	errorMessage?: string;
+}
 
+/** Writable initial-state subset of {@link AgentState}. */
+export interface AgentStateInit {
+	systemPrompt?: string;
+	model?: Model<any>;
+	thinkingLevel?: ThinkingLevel;
+	tools?: AgentTool[];
+	messages?: AgentMessage[];
+}
+
+
+/**
+ * Read/write view over the mutable state exposed through {@link Agent.state}.
+ *
+ * A class (not accessor properties in the state literal): scriptc rejects set
+ * accessors in object literals, while class accessors lower fine. Assigning
+ * `state.tools` / `state.messages` copies the provided top-level array, as the
+ * AgentState contract documents.
+ */
+class AgentStateView implements AgentState {
+	private readonly mutable: MutableAgentState;
+	constructor(mutable: MutableAgentState) {
+		this.mutable = mutable;
+	}
+	get systemPrompt(): string {
+		return this.mutable.systemPrompt;
+	}
+	set systemPrompt(value: string) {
+		this.mutable.systemPrompt = value;
+	}
+	get model(): Model<any> {
+		return this.mutable.model;
+	}
+	set model(value: Model<any>) {
+		this.mutable.model = value;
+	}
+	get thinkingLevel(): import("./types.ts").ThinkingLevel {
+		return this.mutable.thinkingLevel;
+	}
+	set thinkingLevel(value: import("./types.ts").ThinkingLevel) {
+		this.mutable.thinkingLevel = value;
+	}
+	set tools(tools: AgentTool<any>[]) {
+		this.mutable.tools = tools.slice();
+	}
+	get tools(): AgentTool<any>[] {
+		return this.mutable.tools;
+	}
+	set messages(messages: AgentMessage[]) {
+		this.mutable.messages = messages.slice();
+	}
+	get messages(): AgentMessage[] {
+		return this.mutable.messages;
+	}
+	get isStreaming(): boolean {
+		return this.mutable.isStreaming;
+	}
+	get streamingMessage(): AgentMessage | undefined {
+		return this.mutable.streamingMessage;
+	}
+	get pendingToolCalls(): readonly string[] {
+		return this.mutable.pendingToolCalls;
+	}
+	get errorMessage(): string | undefined {
+		return this.mutable.errorMessage;
+	}
+}
+
+function createMutableAgentState(initialState: AgentStateInit | undefined): MutableAgentState {
+	// scriptc: chained optional calls resolve to `any` — narrow with ifs.
+	let tools: AgentTool<any>[] = [];
+	if (initialState !== undefined && initialState.tools !== undefined) {
+		tools = initialState.tools.slice();
+	}
+	let messages: AgentMessage[] = [];
+	if (initialState !== undefined && initialState.messages !== undefined) {
+		messages = initialState.messages.slice();
+	}
 	return {
-		systemPrompt: initialState?.systemPrompt ?? "",
-		model: initialState?.model ?? DEFAULT_MODEL,
-		thinkingLevel: initialState?.thinkingLevel ?? "off",
-		get tools() {
-			return tools;
-		},
-		set tools(nextTools: AgentTool<any>[]) {
-			tools = nextTools.slice();
-		},
-		get messages() {
-			return messages;
-		},
-		set messages(nextMessages: AgentMessage[]) {
-			messages = nextMessages.slice();
-		},
+		systemPrompt: initialState === undefined ? "" : initialState.systemPrompt === undefined ? "" : initialState.systemPrompt,
+		model: initialState === undefined || initialState.model === undefined ? DEFAULT_MODEL : initialState.model,
+		thinkingLevel: initialState === undefined || initialState.thinkingLevel === undefined ? "off" : initialState.thinkingLevel,
+		tools,
+		messages,
 		isStreaming: false,
 		streamingMessage: undefined,
-		pendingToolCalls: new Set<string>(),
+		pendingToolCalls: [],
 		errorMessage: undefined,
 	};
 }
 
 /** Options for constructing an {@link Agent}. */
 export interface AgentOptions {
-	initialState?: Partial<Omit<AgentState, "pendingToolCalls" | "isStreaming" | "streamingMessage" | "errorMessage">>;
-	convertToLlm?: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	initialState?: AgentStateInit;
+	// scriptc-port note: always-promise (sync-or-async union not compilable).
+	convertToLlm?: (messages: AgentMessage[]) => Promise<Message[]>;
 	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 	streamFn: StreamFn;
-	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
-	onPayload?: SimpleStreamOptions["onPayload"];
-	onResponse?: SimpleStreamOptions["onResponse"];
+	getApiKey?: (provider: string) => Promise<string | undefined>;
+	// scriptc-port note: spelled out (indexed-access types on imported
+	// interfaces resolve loosely in the compiled graph).
+	onPayload?: (payload: unknown, model: Model<any>) => unknown | undefined | Promise<unknown | undefined>;
+	onResponse?: (response: ProviderResponse, model: Model<any>) => void | Promise<void>;
+	// Callback option types are Promise-returning to match the stored fields
+	// (scriptc-port normalization; every consumer awaits these).
 	beforeToolCall?: (context: BeforeToolCallContext, signal?: AbortSignal) => Promise<BeforeToolCallResult | undefined>;
 	afterToolCall?: (context: AfterToolCallContext, signal?: AbortSignal) => Promise<AfterToolCallResult | undefined>;
-	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext, signal?: AbortSignal) => boolean | Promise<boolean>;
-	prepareNextTurn?: (
-		signal?: AbortSignal,
-	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext, signal?: AbortSignal) => Promise<boolean>;
+	prepareNextTurn?: (signal?: AbortSignal) => Promise<AgentLoopTurnUpdate | undefined>;
 	prepareNextTurnWithContext?: (
 		context: PrepareNextTurnContext,
 		signal?: AbortSignal,
-	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+	) => Promise<AgentLoopTurnUpdate | undefined>;
 	steeringMode?: QueueMode;
 	followUpMode?: QueueMode;
 	sessionId?: string;
@@ -177,14 +263,29 @@ type ActiveRun = {
  */
 export class Agent {
 	private _state: MutableAgentState;
-	private readonly listeners = new Set<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void>();
+	// Array, not Set: scriptc (the compiler for the native scriptc-port binary)
+	// limits Set elements to numbers and strings, but arrays of functions are a
+	// supported shape. Semantics are preserved — subscribe/unsubscribe and
+	// listener order behave identically; only duplicate registration of the same
+	// function object is no longer deduplicated, which pi never relied on.
+	private readonly listeners: Array<(event: AgentEvent, signal: AbortSignal) => Promise<void> | void> = [];
 	private readonly steeringQueue: PendingMessageQueue;
 	private readonly followUpQueue: PendingMessageQueue;
 
-	public convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	// Fields below store Promise-returning callbacks: the scriptc port
+	// constructs Agent from code that also touches island (dynamically-served)
+	// modules, and sync-or-async union returns are not representable across that
+	// boundary. Every consumer awaits these callbacks, so behaviour is
+	// unchanged; sync callbacks are wrapped into async ones in the constructor.
+	public convertToLlm: (messages: AgentMessage[]) => Promise<Message[]>;
 	public transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 	public streamFunction: StreamFn;
-	public getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	// Stored Promise-returning: the scriptc port constructs Agent from code that
+	// also touches island (dynamically-served) modules, and a sync-or-async union
+	// return is not representable across that boundary. The only consumer
+	// (agent-loop.ts) awaits the result, so behaviour is unchanged; sync
+	// callbacks are wrapped into async ones here.
+	public getApiKey?: (provider: string) => Promise<string | undefined>;
 	public onPayload?: SimpleStreamOptions["onPayload"];
 	public onResponse?: SimpleStreamOptions["onResponse"];
 	public beforeToolCall?: (
@@ -198,15 +299,16 @@ export class Agent {
 	public shouldStopAfterTurn?: (
 		context: ShouldStopAfterTurnContext,
 		signal?: AbortSignal,
-	) => boolean | Promise<boolean>;
+	) => Promise<boolean>;
 	public prepareNextTurn?: (
 		signal?: AbortSignal,
-	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+	) => Promise<AgentLoopTurnUpdate | undefined>;
 	public prepareNextTurnWithContext?: (
 		context: PrepareNextTurnContext,
 		signal?: AbortSignal,
-	) => Promise<AgentLoopTurnUpdate | undefined> | AgentLoopTurnUpdate | undefined;
+	) => Promise<AgentLoopTurnUpdate | undefined>;
 	private activeRun?: ActiveRun;
+	private stateView?: AgentStateView;
 	/** Session identifier forwarded to providers for cache-aware backends. */
 	public sessionId?: string;
 	/** Optional per-level thinking token budgets forwarded to the stream function. */
@@ -219,27 +321,31 @@ export class Agent {
 	public toolExecution: ToolExecutionMode;
 
 	constructor(options: AgentOptions) {
-		// Older compiled consumers may omit options or streamFn even though the current API requires them.
-		const runtimeOptions: Partial<AgentOptions> = options ?? {};
-		this._state = createMutableAgentState(runtimeOptions.initialState);
-		this.convertToLlm = runtimeOptions.convertToLlm ?? defaultConvertToLlm;
-		this.transformContext = runtimeOptions.transformContext;
-		this.streamFunction = runtimeOptions.streamFn ?? getDefaultStreamFn();
-		this.getApiKey = runtimeOptions.getApiKey;
-		this.onPayload = runtimeOptions.onPayload;
-		this.onResponse = runtimeOptions.onResponse;
-		this.beforeToolCall = runtimeOptions.beforeToolCall;
-		this.afterToolCall = runtimeOptions.afterToolCall;
-		this.shouldStopAfterTurn = runtimeOptions.shouldStopAfterTurn;
-		this.prepareNextTurn = runtimeOptions.prepareNextTurn;
-		this.prepareNextTurnWithContext = runtimeOptions.prepareNextTurnWithContext;
-		this.steeringQueue = new PendingMessageQueue(runtimeOptions.steeringMode ?? "one-at-a-time");
-		this.followUpQueue = new PendingMessageQueue(runtimeOptions.followUpMode ?? "one-at-a-time");
-		this.sessionId = runtimeOptions.sessionId;
-		this.thinkingBudgets = runtimeOptions.thinkingBudgets;
-		this.transport = runtimeOptions.transport ?? "auto";
-		this.maxRetryDelayMs = runtimeOptions.maxRetryDelayMs;
-		this.toolExecution = runtimeOptions.toolExecution ?? "parallel";
+		// scriptc-port note: fields are read without optional chaining — `?.`
+		// results resolve to `any` in the compiled graph, which then rejects the
+		// static field assignments below. `options` is a required parameter.
+		this._state = createMutableAgentState(options.initialState);
+		this.convertToLlm = async (messages: AgentMessage[]): Promise<Message[]> => {
+			if (options.convertToLlm !== undefined) return options.convertToLlm(messages);
+			return defaultConvertToLlm(messages);
+		};
+		this.transformContext = options.transformContext;
+		this.streamFunction = options.streamFn !== undefined ? options.streamFn : getDefaultStreamFn();
+		this.getApiKey = options.getApiKey;
+		this.onPayload = options.onPayload;
+		this.onResponse = options.onResponse;
+		this.beforeToolCall = options.beforeToolCall;
+		this.afterToolCall = options.afterToolCall;
+		this.shouldStopAfterTurn = options.shouldStopAfterTurn;
+		this.prepareNextTurn = options.prepareNextTurn;
+		this.prepareNextTurnWithContext = options.prepareNextTurnWithContext;
+		this.steeringQueue = new PendingMessageQueue(options.steeringMode ?? "one-at-a-time");
+		this.followUpQueue = new PendingMessageQueue(options.followUpMode ?? "one-at-a-time");
+		this.sessionId = options.sessionId;
+		this.thinkingBudgets = options.thinkingBudgets;
+		this.transport = options.transport ?? "auto";
+		this.maxRetryDelayMs = options.maxRetryDelayMs;
+		this.toolExecution = options.toolExecution ?? "parallel";
 	}
 
 	/**
@@ -253,8 +359,11 @@ export class Agent {
 	 * become idle until all awaited listeners for that event have settled.
 	 */
 	subscribe(listener: (event: AgentEvent, signal: AbortSignal) => Promise<void> | void): () => void {
-		this.listeners.add(listener);
-		return () => this.listeners.delete(listener);
+		this.listeners.push(listener);
+		return () => {
+			const index = this.listeners.indexOf(listener);
+			if (index !== -1) this.listeners.splice(index, 1);
+		};
 	}
 
 	/**
@@ -263,14 +372,18 @@ export class Agent {
 	 * Assigning `state.tools` or `state.messages` copies the provided top-level array.
 	 */
 	get state(): AgentState {
-		return this._state;
+		if (this.stateView === undefined) this.stateView = new AgentStateView(this._state);
+		return this.stateView;
 	}
 
 	/** Build a provider context through the same transform and conversion pipeline used by agent requests. */
 	async buildProviderContext(context: AgentContext, signal?: AbortSignal): Promise<Context> {
 		return buildProviderContextFromAgentContext(
 			context,
-			{ convertToLlm: this.convertToLlm, transformContext: this.transformContext },
+			{
+				convertToLlm: this.convertToLlm,
+				transformContext: this.transformContext ?? (async (messages: AgentMessage[]) => messages),
+			},
 			signal,
 		);
 	}
@@ -352,7 +465,7 @@ export class Agent {
 		this._state.messages = [];
 		this._state.isStreaming = false;
 		this._state.streamingMessage = undefined;
-		this._state.pendingToolCalls = new Set<string>();
+		this._state.pendingToolCalls = [];
 		this._state.errorMessage = undefined;
 		this.clearFollowUpQueue();
 		this.clearSteeringQueue();
@@ -405,8 +518,15 @@ export class Agent {
 		input: string | AgentMessage | AgentMessage[],
 		images?: ImageContent[],
 	): AgentMessage[] {
-		if (Array.isArray(input)) {
-			return input;
+		// scriptc: neither Array.isArray nor `instanceof Array` (builtin
+		// right-hand side) is supported, and `in` needs record-typed receivers —
+		// duck-type arrays via an optional `length` property.
+		if (typeof input === "object" && input !== null) {
+			const asLength = input as { length?: number };
+			if (typeof asLength.length === "number") {
+				return input as AgentMessage[];
+			}
+			return [input as AgentMessage];
 		}
 
 		if (typeof input !== "string") {
@@ -414,8 +534,8 @@ export class Agent {
 		}
 
 		const content: Array<TextContent | ImageContent> = [{ type: "text", text: input }];
-		if (images && images.length > 0) {
-			content.push(...images);
+		if (images !== undefined && images.length > 0) {
+			for (const image of images) content.push(image);
 		}
 		return [{ role: "user", content, timestamp: Date.now() }];
 	}
@@ -462,6 +582,7 @@ export class Agent {
 		return {
 			model: this._state.model,
 			reasoning: this._state.thinkingLevel === "off" ? undefined : this._state.thinkingLevel,
+			transformContext: this.transformContext ?? (async (messages: AgentMessage[]) => messages),
 			sessionId: this.sessionId,
 			onPayload: this.onPayload,
 			onResponse: this.onResponse,
@@ -472,19 +593,20 @@ export class Agent {
 			beforeToolCall: this.beforeToolCall,
 			afterToolCall: this.afterToolCall,
 			shouldStopAfterTurn: shouldStopAfterTurn
-				? async (context) => await shouldStopAfterTurn(context, this.signal)
+				? async (context: ShouldStopAfterTurnContext): Promise<boolean> =>
+						shouldStopAfterTurn(context, this.signal)
 				: undefined,
 			prepareNextTurn:
-				this.prepareNextTurnWithContext || this.prepareNextTurn
-					? async (context) => {
-							if (this.prepareNextTurnWithContext) {
-								return await this.prepareNextTurnWithContext(context, this.signal);
+				this.prepareNextTurnWithContext !== undefined || this.prepareNextTurn !== undefined
+					? async (context: PrepareNextTurnContext): Promise<AgentLoopTurnUpdate | undefined> => {
+							if (this.prepareNextTurnWithContext !== undefined) {
+								return this.prepareNextTurnWithContext(context, this.signal);
 							}
-							return await this.prepareNextTurn?.(this.signal);
+							const next = this.prepareNextTurn;
+							return next !== undefined ? next(this.signal) : undefined;
 						}
 					: undefined,
 			convertToLlm: this.convertToLlm,
-			transformContext: this.transformContext,
 			getApiKey: this.getApiKey,
 			getSteeringMessages: async () => {
 				if (skipInitialSteeringPoll) {
@@ -531,7 +653,7 @@ export class Agent {
 			model: this._state.model.id,
 			usage: EMPTY_USAGE,
 			stopReason: aborted ? "aborted" : "error",
-			errorMessage: error instanceof Error ? error.message : String(error),
+			errorMessage: errorMessageOf(error),
 			timestamp: Date.now(),
 		} satisfies AgentMessage;
 		await this.processEvents({ type: "message_start", message: failureMessage });
@@ -543,7 +665,7 @@ export class Agent {
 	private finishRun(): void {
 		this._state.isStreaming = false;
 		this._state.streamingMessage = undefined;
-		this._state.pendingToolCalls = new Set<string>();
+		this._state.pendingToolCalls = [];
 		this.activeRun?.resolve();
 		this.activeRun = undefined;
 	}
@@ -571,16 +693,15 @@ export class Agent {
 				break;
 
 			case "tool_execution_start": {
-				const pendingToolCalls = new Set(this._state.pendingToolCalls);
-				pendingToolCalls.add(event.toolCallId);
-				this._state.pendingToolCalls = pendingToolCalls;
+				const pendingToolCalls = this._state.pendingToolCalls;
+				if (!pendingToolCalls.includes(event.toolCallId)) pendingToolCalls.push(event.toolCallId);
 				break;
 			}
 
 			case "tool_execution_end": {
-				const pendingToolCalls = new Set(this._state.pendingToolCalls);
-				pendingToolCalls.delete(event.toolCallId);
-				this._state.pendingToolCalls = pendingToolCalls;
+				const pendingToolCalls = this._state.pendingToolCalls;
+				const doneIndex = pendingToolCalls.indexOf(event.toolCallId);
+				if (doneIndex !== -1) pendingToolCalls.splice(doneIndex, 1);
 				break;
 			}
 

@@ -121,7 +121,7 @@ describe("Agent", () => {
 		expect(agent.state.messages).toEqual([]);
 		expect(agent.state.isStreaming).toBe(false);
 		expect(agent.state.streamingMessage).toBe(undefined);
-		expect(agent.state.pendingToolCalls).toEqual(new Set());
+		expect(agent.state.pendingToolCalls).toEqual([]);
 		expect(agent.state.errorMessage).toBeUndefined();
 	});
 

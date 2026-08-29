@@ -21,15 +21,21 @@ import type { Static, TSchema } from "typebox";
  *
  * Contract:
  * - Must not throw or return a rejected promise for request/model/runtime failures.
- * - Must return an AssistantMessageEventStream.
+ * - Must resolve to an AssistantMessageEventStream.
  * - Failures must be encoded in the returned stream via protocol events and a
  *   final AssistantMessage with stopReason "error" or "aborted" and errorMessage.
+ *
+ * scriptc-port note: this used to be `AssistantMessageEventStream |
+ * Promise<AssistantMessageEventStream>`. A class-instance/Promise union value
+ * is not compilable in scriptc, and every consumer awaits the result, so the
+ * return was normalized to always-promise (same treatment as the other
+ * sync-or-async callbacks).
  */
 export type StreamFn = (
 	model: Model<Api>,
 	context: Context,
 	options?: SimpleStreamOptions,
-) => AssistantMessageEventStream | Promise<AssistantMessageEventStream>;
+) => Promise<AssistantMessageEventStream>;
 
 /**
  * Configuration for how tool calls from a single assistant message are executed.
@@ -144,7 +150,8 @@ export interface AgentLoopTurnUpdate {
 	thinkingLevel?: ThinkingLevel;
 }
 
-export interface PrepareNextTurnContext extends ShouldStopAfterTurnContext {}
+// scriptc-port note: type alias (empty `interface ... extends` didn't compile).
+export type PrepareNextTurnContext = ShouldStopAfterTurnContext;
 
 export interface AgentLoopConfig extends SimpleStreamOptions {
 	model: Model<any>;
@@ -175,7 +182,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * })
 	 * ```
 	 */
-	convertToLlm: (messages: AgentMessage[]) => Message[] | Promise<Message[]>;
+	// scriptc-port note: always-promise (sync-or-async union not compilable).
+	convertToLlm: (messages: AgentMessage[]) => Promise<Message[]>;
 
 	/**
 	 * Optional transform applied to the context before `convertToLlm`.
@@ -197,7 +205,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 * }
 	 * ```
 	 */
-	transformContext?: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
+	// scriptc-port note: required (createLoopConfig supplies an identity
+	// fallback) — optional-call materialization has no lowering.
+	transformContext: (messages: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>;
 
 	/**
 	 * Resolves an API key dynamically for each LLM call.
@@ -207,7 +217,9 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 *
 	 * Contract: must not throw or reject. Return undefined when no key is available.
 	 */
-	getApiKey?: (provider: string) => Promise<string | undefined> | string | undefined;
+	// scriptc-port note: always-promise (the only consumer awaits it); the
+	// sync-or-async union is not compilable in the static graph.
+	getApiKey?: (provider: string) => Promise<string | undefined>;
 
 	/**
 	 * Called after each turn fully completes and `turn_end` has been emitted.
@@ -219,7 +231,8 @@ export interface AgentLoopConfig extends SimpleStreamOptions {
 	 *
 	 * Contract: must not throw or reject. Throwing interrupts the low-level agent loop without producing a normal event sequence.
 	 */
-	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => boolean | Promise<boolean>;
+		// scriptc-port note: always-promise (consumers await it).
+	shouldStopAfterTurn?: (context: ShouldStopAfterTurnContext) => Promise<boolean>;
 
 	/**
 	 * Called after `turn_end` and before the loop decides whether another provider request should start.
@@ -314,7 +327,14 @@ export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhi
  * ```
  */
 export interface CustomAgentMessages {
-	// Empty by default - apps extend via declaration merging
+	// Empty by default - apps extend via declaration merging.
+	//
+	// scriptc-port note: the reserved `never` member keeps `keyof` non-empty.
+	// scriptc resolves an index access over an empty interface to `any`, which
+	// would collapse `AgentMessage = Message | ...` into `any` and any-ize the
+	// whole agent graph. A required `never` member changes nothing for
+	// TypeScript (the indexed type stays `never`) and nothing at runtime.
+	__reserved: never;
 }
 
 /**
@@ -337,12 +357,16 @@ export interface AgentState {
 	model: Model<any>;
 	/** Requested reasoning level for future turns. */
 	thinkingLevel: ThinkingLevel;
-	/** Available tools. Assigning a new array copies the top-level array. */
-	set tools(tools: AgentTool<any>[]);
-	get tools(): AgentTool<any>[];
+	/**
+	 * Available tools. Assigning a new array copies the top-level array.
+	 *
+	 * scriptc-port note: plain properties (not get/set accessor members) —
+	 * scriptc cannot compile accessor-declaring interfaces as value types.
+	 * The copy-on-assign contract is implemented by the Agent.state view.
+	 */
+	tools: AgentTool<any>[];
 	/** Conversation transcript. Assigning a new array copies the top-level array. */
-	set messages(messages: AgentMessage[]);
-	get messages(): AgentMessage[];
+	messages: AgentMessage[];
 	/**
 	 * True while the agent is processing a prompt or continuation.
 	 *
@@ -351,14 +375,20 @@ export interface AgentState {
 	readonly isStreaming: boolean;
 	/** Partial assistant message for the current streamed response, if any. */
 	readonly streamingMessage?: AgentMessage;
-	/** Tool call ids currently executing. */
-	readonly pendingToolCalls: ReadonlySet<string>;
+	/**
+	 * Tool call ids currently executing.
+	 *
+	 * A readonly array (not a Set): the scriptc port has no lowering for the
+	 * Set copy-constructor, arrays keep the same read surface (includes /
+	 * length / iteration), and a Set-in-union value is not compilable there.
+	 */
+	readonly pendingToolCalls: readonly string[];
 	/** Error message from the most recent failed or aborted assistant turn, if any. */
 	readonly errorMessage?: string;
 }
 
 /** Final or partial result produced by a tool. */
-export interface AgentToolResult<T> {
+export interface AgentToolResult<T = unknown> {
 	/** Text or image content returned to the model. */
 	content: (TextContent | ImageContent)[];
 	/** Arbitrary structured details for logs or UI rendering. */
@@ -380,10 +410,10 @@ export interface AgentToolResult<T> {
  * The callback is scoped to the current `execute()` invocation. Calls made after
  * the tool promise settles are ignored.
  */
-export type AgentToolUpdateCallback<T = any> = (partialResult: AgentToolResult<T>) => void;
+export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
 
 /** Tool definition used by the agent runtime. */
-export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = any> extends Tool<TParameters> {
+export interface AgentTool<TParameters extends TSchema = TSchema, TDetails = unknown> extends Tool<TParameters> {
 	/** Human-readable label for UI display. */
 	label: string;
 	/**

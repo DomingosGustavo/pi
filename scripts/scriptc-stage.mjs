@@ -98,7 +98,18 @@ for (const d of dirs.filter((d) => !islandDirs.has(d))) {
 // module identity, so if the imports become relative paths and the augmentation does not,
 // the augmentation silently stops applying (114 SC0001 errors: '"app.exit"' not
 // assignable to KeyId). Both must be rewritten together.
-const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|\bdeclare\s+module\s+)("|')(@earendil-works\/[^"']+)\2/g;
+const SPEC_RE = /(\bfrom\s*|\bimport\s*\(\s*|\bdeclare\s+module\s+)("|')(@earendil-works\/[^"']+|typebox(?:\/[^"']+)?)\2/g;
+
+// ── pi-ai-lite vendoring ─────────────────────────────────────────────────
+// For the minimal scriptc build the whole pi-ai surface is served by a small
+// static module (scriptc-minimal/vendor/pi-ai-lite) instead of the island.
+// The agent loop's Model/Context/StreamFn types then originate in program
+// source, which removes the static/island type contagion that made the Agent
+// class uncompilable. Same import specifiers, so no call site changes.
+const PI_AI_LITE = "packages/coding-agent/src/scriptc-minimal/vendor/pi-ai-lite/index.ts";
+const TYPEBOX_LITE = "packages/coding-agent/src/scriptc-minimal/vendor/pi-ai-lite/typebox.ts";
+const isPiAiSpec = (spec) => spec === "@earendil-works/pi-ai" || spec.startsWith("@earendil-works/pi-ai/");
+const isTypeboxSpec = (spec) => spec === "typebox" || spec.startsWith("typebox/");
 let files = 0;
 let rewrites = 0;
 let metaUrlRewrites = 0;
@@ -116,12 +127,50 @@ function walk(dir) {
 			// module's own URL is known, so substitute the per-module literal. This is
 			// exact (unlike process.argv[1], which is the process entry, not the module),
 			// so self-location keeps working in non-entry modules.
+			if (p.includes(join("agent", "src"))) {
+				// scriptc-port: `Model<any>` / `AgentTool<any, any>` instantiations
+				// carry an `any` member into otherwise-static records, any-izing
+				// the agent graph transitively. The type arguments are only
+				// generic bookkeeping, so drop them in the staged tree.
+				const patchedAny = src
+					.replace(/\bModel<[^<>]*>/g, "Model")
+					.replace(/\bAgentTool<any, any>/g, "AgentTool")
+					.replace(/\bAgentTool<any>/g, "AgentTool")
+					.replace(/\bToolResultMessage<any>/g, "ToolResultMessage")
+					.replace(/\bAgentToolResult<any>/g, "AgentToolResult")
+					.replace(/\bTool<any>/g, "Tool");
+				if (patchedAny !== src) src = patchedAny;
+			}
+			if (p.endsWith(join("agent", "src", "types.ts"))) {
+				// scriptc resolves `never` to `any`, which would collapse AgentMessage
+				// through the index access; `Message` keeps the union a no-op there.
+				src = src.replace("__reserved: never;", "__reserved: Message;");
+				const patched = src.replace(
+					"export type AgentMessage = Message | CustomAgentMessages[keyof CustomAgentMessages];",
+					"// scriptc-port: staged tree drops the CustomAgentMessages index access\n// (scriptc resolves the empty-interface index to `any`/`undefined`); the\n// minimal build has no custom agent messages, so AgentMessage === Message.\nexport type AgentMessage = Message;",
+				);
+				if (patched !== src) {
+					src = patched;
+				}
+			}
 			if (src.includes("import.meta.url")) {
 				const url = `file://${p}`;
 				src = src.replace(/\bimport\.meta\.url\b/g, JSON.stringify(url));
 				metaUrlRewrites++;
 			}
 			src = src.replace(SPEC_RE, (m, kw, q, spec) => {
+				if (isPiAiSpec(spec)) {
+					let rel = relative(dirname(p), join(OUT, PI_AI_LITE)).split(sep).join("/");
+					if (!rel.startsWith(".")) rel = `./${rel}`;
+					rewrites++;
+					return `${kw}${q}${rel}${q}`;
+				}
+				if (isTypeboxSpec(spec)) {
+					let rel = relative(dirname(p), join(OUT, TYPEBOX_LITE)).split(sep).join("/");
+					if (!rel.startsWith(".")) rel = `./${rel}`;
+					rewrites++;
+					return `${kw}${q}${rel}${q}`;
+				}
 				if (isIslanded(spec)) return m;
 				const target = resolveSpecifier(spec);
 				if (!target) {
