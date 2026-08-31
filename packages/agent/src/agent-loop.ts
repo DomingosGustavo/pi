@@ -349,13 +349,62 @@ async function streamAssistantResponse(
 	config.signal = signal;
 	const response = await streamFunction(config.model, llmContext, config);
 
-	// scriptc: `for await` over the island-served event stream has no lowering,
-	// so the loop consumes the final result directly. Streaming updates
-	// (message_update with partial text deltas) are therefore not emitted yet;
-	// an island-side forEachEvent helper can restore them later.
+	// Consume the streaming events. The agent package runs as island JS
+	// (quickjs) where `for await` is native; this restores message_update
+	// emission for TUI streaming, --mode json deltas and extension handlers.
+	let partialMessage: AssistantMessage | null = null;
+	let addedPartial = false;
+	for await (const event of response) {
+		switch (event.type) {
+			case "start":
+				partialMessage = event.partial;
+				context.messages.push(partialMessage);
+				addedPartial = true;
+				await emit({ type: "message_start", message: { ...partialMessage } });
+				break;
+
+			case "text_start":
+			case "text_delta":
+			case "text_end":
+			case "thinking_start":
+			case "thinking_delta":
+			case "thinking_end":
+			case "toolcall_start":
+			case "toolcall_delta":
+			case "toolcall_end":
+				if (partialMessage) {
+					partialMessage = event.partial;
+					context.messages[context.messages.length - 1] = partialMessage;
+					await emit({
+						type: "message_update",
+						assistantMessageEvent: event,
+						message: { ...partialMessage },
+					});
+				}
+				break;
+
+			case "done":
+			case "error": {
+				const finalMessage = await response.result();
+				if (addedPartial) {
+					context.messages[context.messages.length - 1] = finalMessage;
+				} else {
+					context.messages.push(finalMessage);
+					await emit({ type: "message_start", message: finalMessage });
+				}
+				await emit({ type: "message_end", message: finalMessage });
+				return finalMessage;
+			}
+		}
+	}
+
 	const finalMessage = await response.result();
-	context.messages.push(finalMessage);
-	await emit({ type: "message_start", message: finalMessage });
+	if (addedPartial) {
+		context.messages[context.messages.length - 1] = finalMessage;
+	} else {
+		context.messages.push(finalMessage);
+		await emit({ type: "message_start", message: finalMessage });
+	}
 	await emit({ type: "message_end", message: finalMessage });
 	return finalMessage;
 }
