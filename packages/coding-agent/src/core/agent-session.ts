@@ -44,7 +44,6 @@ import {
 	modelsAreEqual,
 	type RetryCallbacks,
 	resetApiProviders,
-	streamSimple,
 } from "@earendil-works/pi-ai/compat";
 import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";

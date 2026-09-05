@@ -329,12 +329,12 @@ export interface TUI extends Component {
 export const VIEWPORT_TUI = Symbol.for("@earendil-works/pi-tui/viewport");
 
 export interface ViewportTUI extends TUI {
-	readonly [VIEWPORT_TUI]: true;
+	readonly __isViewportTUI: true;
 	setLayoutRoot(component: Component | undefined): void;
 }
 
 export function isViewportTUI(tui: TUI): tui is ViewportTUI {
-	return (tui as Partial<ViewportTUI>)[VIEWPORT_TUI] === true;
+	return (tui as Partial<ViewportTUI>).__isViewportTUI === true;
 }
 
 export abstract class TuiBase extends Container implements TUI {
@@ -360,7 +360,7 @@ export abstract class TuiBase extends Container implements TUI {
 	protected stopped = false;
 	private pendingOsc11BackgroundReplies = 0;
 	private pendingOsc11BackgroundQueries: PendingOsc11BackgroundQuery[] = [];
-	private terminalColorSchemeListeners = new Set<(scheme: TerminalColorScheme) => void>();
+	private terminalColorSchemeListeners: ((scheme: TerminalColorScheme) => void)[] = [];
 	private terminalColorSchemeNotificationsEnabled = false;
 	protected readonly logDirectory: string;
 
@@ -754,9 +754,10 @@ export abstract class TuiBase extends Container implements TUI {
 	}
 
 	onTerminalColorSchemeChange(listener: (scheme: TerminalColorScheme) => void): () => void {
-		this.terminalColorSchemeListeners.add(listener);
+		this.terminalColorSchemeListeners.push(listener);
 		return () => {
-			this.terminalColorSchemeListeners.delete(listener);
+			const idx = this.terminalColorSchemeListeners.indexOf(listener);
+			if (idx !== -1) this.terminalColorSchemeListeners.splice(idx, 1);
 		};
 	}
 
@@ -970,7 +971,8 @@ export abstract class TuiBase extends Container implements TUI {
 			return false;
 		}
 
-		for (const listener of this.terminalColorSchemeListeners) {
+		for (let li = 0; li < this.terminalColorSchemeListeners.length; li++) {
+			const listener = this.terminalColorSchemeListeners[li];
 			listener(scheme);
 		}
 		return true;

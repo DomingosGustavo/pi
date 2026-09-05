@@ -35,7 +35,6 @@ import {
 	type OverlayHandle,
 	TuiBase,
 	type TuiStopOptions,
-	VIEWPORT_TUI,
 	type ViewportTUI,
 } from "./tui.ts";
 import {
@@ -163,7 +162,7 @@ export interface TuiAltScreenOptions {
 /** Alternate-screen TUI with a scrollable, application-owned viewport. */
 export class TuiAltScreen extends TuiBase implements ViewportTUI {
 	readonly mode = "fullscreen" as const;
-	readonly [VIEWPORT_TUI] = true as const;
+	readonly __isViewportTUI = true as const;
 	private previousScreen: string[] = [];
 	private lastDocument: string[] = [];
 	private previousScreenWidth = 0;

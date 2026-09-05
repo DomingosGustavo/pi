@@ -4,7 +4,6 @@ import type {
 	Message,
 	Model,
 	ProviderResponse,
-	SimpleStreamOptions,
 	TextContent,
 	ThinkingBudgets,
 	Transport,
